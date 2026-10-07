@@ -1,0 +1,146 @@
+[
+  {
+    "name": "event_date",
+    "datatype": "date",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "partner_id",
+    "datatype": "integer",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "is_new_partner",
+    "datatype": "integer",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "model",
+    "datatype": "string",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "traffic_source",
+    "datatype": "string",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "traffic_geo",
+    "datatype": "string",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "affiliate_group",
+    "datatype": "string",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "commission_group",
+    "datatype": "string",
+    "role": "dimension",
+    "comment": ""
+  },
+  {
+    "name": "reg_count",
+    "datatype": "integer",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "ftd_count",
+    "datatype": "integer",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "ftd_attempts",
+    "datatype": "integer",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "ftd_sum",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "dep_sum",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "dep_count",
+    "datatype": "integer",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "bonus_sum",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "profit",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "ngr",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "rs",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "cpa",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "cpa_alt",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "commission",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "fix_alt",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "hybrid",
+    "datatype": "real",
+    "role": "measure",
+    "comment": ""
+  },
+  {
+    "name": "updated_at",
+    "datatype": "datetime",
+    "role": "dimension",
+    "comment": ""
+  }
+]

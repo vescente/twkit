@@ -1,0 +1,14 @@
+Copyright (c) 2026 vescente. All rights reserved.
+
+This software, including its source code, documentation and accompanying files, is proprietary
+and confidential. No part of it may be copied, modified, merged, published, distributed,
+sublicensed, sold or otherwise used, in whole or in part, without the prior written permission
+of the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Third-party files keep their own licences: vendor/tableau-document-schemas/ (Apache License 2.0,
+see vendor/tableau-document-schemas/LICENSE.txt).

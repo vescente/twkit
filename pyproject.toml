@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twkit"
+version = "1.0.0"
+description = "Build, edit, check and render Tableau workbooks for AI agents over MCP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dependencies = [
+    "lxml>=5.0",
+    "mcp[cli]>=1.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+data = ["requests>=2.31", "PyMySQL>=1.1", "tableauhyperapi>=0.0.21408"]
+view = ["pillow>=10.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+twkit-mcp = "twkit.server.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "mcp"}
+packages = ["twkit", "twkit.server"]

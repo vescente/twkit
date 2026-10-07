@@ -1,0 +1,22 @@
+{
+ "rules": {"currency": "Amounts are in EUR at the rate of the operation date."},
+ "final_schemas": ["marts"],
+ "checks": {
+  "ngr": {"canon": "NGR = GGR - bonuses, traffic costs not deducted", "required": ["ngr"],
+          "forbidden": ["rs_cost", "cpa_cost", "fix_cost", "hybrid_cost"],
+          "why": "deducting traffic costs gives profit, not NGR"},
+  "ggr": {"canon": "GGR = bets - wins, real-money bets only", "required": ["ggr"],
+          "why": "bonus bets are excluded from GGR"},
+  "ftd count": {"canon": "FTD count = unique new depositors of the day (ftd_count)", "required": ["ftd_count"],
+                "forbidden": ["ftd_attempts"], "why": "first-deposit attempts are a different metric"},
+  "approval rate": {"canon": "Approval Rate FTD = SUM(ftd_count) / NULLIF(SUM(ftd_attempts), 0)",
+                    "required_all": ["ftd_count", "ftd_attempts"], "advised": ["NULLIF"],
+                    "why": "an average of daily rates is not the period rate; NULLIF guards division by zero"},
+  "ftd sum": {"canon": "ftd_sum is lifetime deposits of the day's FTD players", "required": ["ftd_amount", "ftd_sum"],
+              "why": "it is not the day's deposits"},
+  "total cost": {"canon": "Total cost = RS + CPA + FIX + HYBRID", "required": ["rs_cost", "cpa_cost"],
+                 "forbidden": ["cpa_alt"], "why": "cpa_alt uses a different methodology"},
+  "romi": {"canon": "ROMI = return / costs", "advised": ["NULLIF"],
+           "why": "NULLIF in the denominator makes division by zero explicit"}
+ }
+}

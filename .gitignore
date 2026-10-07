@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+# Built workbooks and extracts: reproducible, hundreds of megabytes
+dashboards/out/*.twb
+dashboards/out/*.twbx
+dashboards/out/*.hyper
+output/
+_build/
+*.hyper
+tmp/
+*.egg-info/
+# Hyper and Tableau scratch files
+hyperd.log
+*.twbr
+# Screenshots and sketches are check artefacts, not sources
+_shots/
+_sketch/
+_work_b/
+
+# environment files may hold secrets: never published
+.env*
