@@ -18,6 +18,7 @@ from . import safexml
 USER_NS = "http://www.tableausoftware.com/xml/user"
 VERSION = "18.1"
 SOURCE_BUILD = "2025.3.1 (20253.25.1210.1815)"
+LOCALE = "en_IE"          # house rule: reports open with Irish dates (dd/mm/yyyy)
 MARK = "built by twkit"
 MANIFEST = ("AnimationOnByDefault", "MarkAnimation", "ObjectModelEncapsulateLegacy",
             "ObjectModelTableType", "SchemaViewerObjectModel", "SheetIdentifierTracking",
@@ -51,7 +52,7 @@ def child(parent, tag: str, order=WORKBOOK_ORDER):
 def skeleton():
     """An empty workbook as Tableau Desktop starts one."""
     root = etree.Element("workbook", nsmap={"user": USER_NS})
-    for k, v in (("original-version", VERSION), ("source-build", SOURCE_BUILD),
+    for k, v in (("locale", LOCALE), ("original-version", VERSION), ("source-build", SOURCE_BUILD),
                  ("source-platform", "mac"), ("version", VERSION)):
         root.set(k, v)
     man = etree.SubElement(root, "document-format-change-manifest")

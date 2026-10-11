@@ -11,7 +11,7 @@ from `preflight`. Add a row when you add a module.
 | module | role | responsibility |
 |---|---|---|
 | `blocks.py` | build | dashboard constructions known to open |
-| `book.py` | build | the workbook being built: skeleton, open and save, calculations, parameters, sheets |
+| `book.py` | build | the workbook being built: skeleton (locale `en_IE`), open and save, calculations, parameters, sheets |
 | `canon.py` | channel: metrics | metric definitions as executable checks on formulas and SQL |
 | `cdp.py` | view | one persistent headless Chrome for the frame, over CDP (own port and profile) |
 | `chclient.py` | data | the ClickHouse HTTP client, the only way twkit reaches ClickHouse; `explain_ast` returns the server's parse tree |
