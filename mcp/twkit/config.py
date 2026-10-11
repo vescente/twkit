@@ -1,4 +1,8 @@
-"""Where twkit gets its settings from: the environment, `~/.twkit/.env`, `~/.twkit/config.toml`."""
+"""Where twkit gets its settings from.
+
+Connections and secrets: the environment, then `~/.twkit/.env` (template `example.env`).
+Paths and guards: `~/.twkit/config.toml`, which never holds a connection or a password.
+"""
 from __future__ import annotations
 
 import os
@@ -47,22 +51,14 @@ def _from_env_file() -> dict:
     return out
 
 
+def env_file_values() -> dict:
+    """Every `TWKIT_*` value of `~/.twkit/.env`; for the commit guard, never for display."""
+    return dict(_from_env_file())
+
+
 def _env(key: str) -> str:
     """A `TWKIT_*` value from the process environment, then from `~/.twkit/.env`."""
     return os.environ.get(key) or _from_env_file().get(key) or ""
-
-
-@lru_cache(maxsize=1)
-def _from_file() -> dict:
-    try:
-        with open(CONFIG_PATH, "rb") as fh:
-            raw = tomllib.load(fh)
-            merged = dict(raw.get("database", {}))
-            for key, value in (raw.get("clickhouse") or {}).items():
-                merged[key if key in _CH_FIELDS else f"ch_{key}"] = value
-            return merged
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
 
 
 @lru_cache(maxsize=None)
@@ -84,11 +80,7 @@ def get(field: str, default: str = "") -> str:
     """One setting, from the first source that has it."""
     if field not in _ALL_FIELDS:
         raise KeyError(f"unknown setting {field!r}; known: {sorted(_ALL_FIELDS)}")
-    env = _env(_env_name(field))
-    if env:
-        return env
-    value = _from_file().get(field)
-    return default if value in (None, "") else str(value)
+    return _env(_env_name(field)) or default
 
 
 def source_of(field: str) -> str:
@@ -97,8 +89,6 @@ def source_of(field: str) -> str:
         return "environment"
     if _from_env_file().get(_env_name(field)):
         return ENV_FILE
-    if _from_file().get(field) not in (None, ""):
-        return CONFIG_PATH
     return "not configured"
 
 
@@ -111,6 +101,10 @@ def describe() -> dict:
         else:
             out[field] = {"value": get(field), "from": source_of(field)}
     out["not_configured"] = [f for f in _ALL_FIELDS if not get(f)]
+    ignored = [f"[{s}]" for s in ("clickhouse", "database") if _section(s)]
+    if ignored:
+        out["ignored"] = (f"{', '.join(ignored)} in {CONFIG_PATH} is not read; "
+                          f"move the connection to {ENV_FILE}")
     return out
 
 
@@ -119,15 +113,14 @@ def missing_reason(*fields: str) -> str:
     absent = [f for f in (fields or tuple(_ALL_FIELDS)) if not get(f)]
     if not absent:
         return ""
-    section = "[clickhouse]" if all(f in _CH_FIELDS for f in absent) else "[database]"
     return (f"database settings missing: {', '.join(absent)}. "
             f"Set {', '.join(_env_name(f) for f in absent)} in the environment or in "
-            f"{ENV_FILE} (template: example.env), or add a {section} section to {CONFIG_PATH}")
+            f"{ENV_FILE} (template: example.env)")
 
 
 def reset_cache() -> None:
     """Forget cached sources."""
-    for source in (_from_env_file, _from_file, _section):
+    for source in (_from_env_file, _section):
         source.cache_clear()
 
 

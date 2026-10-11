@@ -33,13 +33,13 @@ def test_missing_settings_report_a_reason_instead_of_crashing(monkeypatch):
     assert C.missing_reason("host") != "", "absence must be explainable, not silent"
 
 
-def test_config_file_is_read_when_environment_is_empty(tmp_path, monkeypatch):
+def test_connection_in_config_toml_is_ignored_and_said(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
-    path.write_text('[database]\nhost = "from-file"\nport = 3306\n', encoding="utf-8")
+    path.write_text('[database]\nhost = "from-file"\n', encoding="utf-8")
     monkeypatch.setattr(C, "CONFIG_PATH", str(path))
     C.reset_cache()
-    assert C.get("host") == "from-file" and C.get("port") == "3306"
-    assert C.source_of("host") == str(path)
+    assert C.get("host") == "" and C.source_of("host") == "not configured"
+    assert "[database]" in C.describe()["ignored"]
 
 
 def test_password_never_appears_in_describe(monkeypatch):
@@ -80,11 +80,8 @@ def test_env_file_is_read_and_reported(tmp_path, monkeypatch):
     assert C.get("ch_host") == "from-env-file" and C.source_of("ch_host") == path
 
 
-def test_environment_beats_env_file_and_env_file_beats_config(tmp_path, monkeypatch):
-    toml = tmp_path / "config.toml"
-    toml.write_text('[clickhouse]\nhost = "from-config"\nport = "1"\n', encoding="utf-8")
-    monkeypatch.setattr(C, "CONFIG_PATH", str(toml))
-    _env_file(tmp_path, monkeypatch, "TWKIT_CH_HOST=from-env-file\n")
+def test_environment_beats_env_file(tmp_path, monkeypatch):
+    _env_file(tmp_path, monkeypatch, "TWKIT_CH_HOST=from-env-file\nTWKIT_CH_PORT=1\n")
     assert C.get("ch_host") == "from-env-file" and C.get("ch_port") == "1"
     monkeypatch.setenv("TWKIT_CH_HOST", "from-process")
     assert C.get("ch_host") == "from-process"

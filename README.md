@@ -32,14 +32,14 @@ Register the server in the MCP client (`.mcp.json`):
 
 ## Configure
 
-Connection settings and secrets live in `~/.twkit/.env` (copy `example.env`, `chmod 600`); paths and
-guards in `~/.twkit/config.toml`. `show_config` reports what resolved, a password only as present or
-absent. Each setting comes from the process environment, then `~/.twkit/.env`, then the file:
+Connections and secrets live only in the environment or `~/.twkit/.env` (copy `example.env`,
+`chmod 600`); `~/.twkit/config.toml` holds paths and guards and never a connection. `show_config`
+reports what resolved, a password only as present or absent. The environment overrides the file:
 
-| what | environment | file |
-|---|---|---|
-| ClickHouse (data checks, extracts) | `TWKIT_CH_HOST`, `_PORT`, `_USER`, `_DB`, `_PASSWORD`, `_CERT` | `[clickhouse]`: `host`, `port`, `user`, `db`, `password`, `cert` |
-| workbook database (Tableau sign-in) | `TWKIT_DB_HOST`, `_PORT`, `_USER`, `_NAME`, `_PASSWORD` | `[database]`: `host`, `port`, `user`, `name`, `password` |
+| what | variables (environment or `~/.twkit/.env`) |
+|---|---|
+| ClickHouse (data checks, extracts) | `TWKIT_CH_HOST`, `_PORT`, `_USER`, `_DB`, `_PASSWORD`, `_CERT` |
+| workbook database (Tableau sign-in) | `TWKIT_DB_HOST`, `_PORT`, `_USER`, `_NAME`, `_PASSWORD` |
 
 SQL from a workbook or a tool reaches ClickHouse only as one read: it passes a lexical check, then
 ClickHouse's own parse (`EXPLAIN AST`, which runs nothing) of the exact statement that runs, a

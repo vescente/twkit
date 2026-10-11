@@ -7,6 +7,14 @@ Run from the repo root with the project venv. `selfcheck` requires every script 
 | `frame_corpus.py` | frame regression gate over the inspiration corpus vs Tableau Public renders; a zone that went empty is redrawn once before it counts | `.venv/bin/python tools/frame_corpus.py [--save-baseline] [--only "WHOLE BOOK NAME"]` |
 | `frame_pair.py` | one page side by side: frame render and Tableau Public render | `.venv/bin/python tools/frame_pair.py "<workbook>" "<dashboard>" out.jpg` |
 | `study_workbooks.py` | measure a folder of workbooks (forms, layout, formatting) as markdown | `.venv/bin/python tools/study_workbooks.py <folder> --label NAME [--json out.json]` |
+| `check_secrets.py` | refuse a commit that carries an env file or a host or password from `~/.twkit/.env`; names only, never values | `.venv/bin/python tools/check_secrets.py [--staged]` |
 | `xsd_notes.py` | generate `docs/FORMAT_NOTES.md`: XSD vs what Tableau writes vs what we write | `.venv/bin/python tools/xsd_notes.py > docs/FORMAT_NOTES.md` |
 
 Corpus paths come from `~/.twkit/config.toml` (`[paths]`), never from code.
+
+Local pre-commit hook (not versioned), once per clone:
+
+```bash
+printf '#!/bin/sh\nexec "$(git rev-parse --show-toplevel)/.venv/bin/python" "$(git rev-parse --show-toplevel)/tools/check_secrets.py" --staged\n' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
