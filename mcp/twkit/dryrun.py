@@ -1963,55 +1963,59 @@ def dry_run(path: str, db: str = "", table: str = "", limit: int = 5,
         tr_.text_cols = {c for _t, c in (tc_ or set())}
         return tr_
 
+    pick = _sheet_targets(book, root, target, _tr)
     try:
-        sql_map = custom_sql_map(book)
-    except Exception:
-        sql_map = {}
-    hyper_ds = hyper_map(book) if isinstance(target, (_HyperTarget, _RelTarget)) else {}
-
-    per_ds, kinds = {}, set()
-    for ds in set(sql_map) | set(hyper_ds):
-        per_ds[ds] = ("hyper", hyper_ds[ds]) if ds in hyper_ds else ("sql", sql_map[ds])
-        kinds.add(per_ds[ds])
-    if len(kinds) < 2:
-        per_ds = {}
-
-    if not per_ds:
-        tr = _tr(target)
-        try:
-            return [_run_sheet(ws, tr, target, limit, shared_filters, sample_rows,
-                               relax, dynamic)
-                    for ws in root.iter("worksheet")]
-        finally:
-            target.close()
-
-    extra, out = {}, []
-    try:
-        for ws in root.iter("worksheet"):
-            ds = sheet_datasource(ws)
-            if ds in per_ds:
-                if ds not in extra:
-                    kind, val = per_ds[ds]
-                    t = (_CustomSqlTarget(val) if kind == "sql"
-                         else _hyper_from_zip(book, val))
-                    if kind == "hyper":
-                        try:
-                            rv_ = relation_view(root, t)
-                        except Exception:
-                            rv_ = None
-                        if rv_:
-                            t = _RelTarget(t, *rv_)
-                    extra[ds] = (t, _tr(t))
-                t, tr = extra[ds]
-            else:
-                t, tr = target, _tr(target)
-            out.append(_run_sheet(ws, tr, t, limit, shared_filters, sample_rows,
-                                  relax, dynamic))
-        return out
+        return [_run_sheet(ws, tr, t, limit, shared_filters, sample_rows, relax, dynamic)
+                for ws in root.iter("worksheet") for t, tr in [pick(ws)]]
     finally:
-        target.close()
-        for t, _ in extra.values():
-            t.close()
+        pick.close()
+
+
+class _sheet_targets:
+    """The source each sheet reads: with sources of several kinds (two extracts, an extract and
+    Custom SQL) a sheet gets its own data source's target; otherwise the workbook's target."""
+
+    def __init__(self, book, root, target, translator):
+        self._tr = translator
+        try:
+            sql_map = custom_sql_map(book)
+        except Exception:
+            sql_map = {}
+        hyper_ds = hyper_map(book) if isinstance(target, (_HyperTarget, _RelTarget)) else {}
+        per_ds, kinds = {}, set()
+        for ds in set(sql_map) | set(hyper_ds):
+            per_ds[ds] = ("hyper", hyper_ds[ds]) if ds in hyper_ds else ("sql", sql_map[ds])
+            kinds.add(per_ds[ds])
+        self.book, self.root, self.target = book, root, target
+        self.per_ds = per_ds if len(kinds) >= 2 else {}
+        self.extra = {}
+        self.default = None
+
+    def __call__(self, ws):
+        ds = sheet_datasource(ws) if ws is not None else None
+        if ds not in self.per_ds:
+            if self.default is None:
+                self.default = (self.target, self._tr(self.target))
+            return self.default
+        if ds not in self.extra:
+            kind, val = self.per_ds[ds]
+            t = _CustomSqlTarget(val) if kind == "sql" else _hyper_from_zip(self.book, val)
+            if kind == "hyper":
+                try:
+                    rv_ = relation_view(self.root, t)
+                except Exception:
+                    rv_ = None
+                if rv_:
+                    t = _RelTarget(t, *rv_)
+            self.extra[ds] = (t, self._tr(t))
+        return self.extra[ds]
+
+    def close(self):
+        try:
+            self.target.close()
+        finally:
+            for t, _ in self.extra.values():
+                t.close()
 
 
 def _measure_names_refs(ws) -> list:
@@ -3045,9 +3049,12 @@ def why_empty(path: str, db: str = "", table: str = "") -> dict:
                           for r in empty]}
 
     out = []
+    pick = _sheet_targets(book, book.root, target, lambda t: None)
+    sheets = {w.get("name"): w for w in book.root.iter("worksheet")}
     try:
         for r in empty:
             item = {"sheet": r.sheet}
+            target = pick(sheets.get(r.sheet))[0]         # the sheet's own extract or SQL
             def count(where: str) -> int:
                 sql = r.base_sql.replace(r.where_sql, where) if r.where_sql else r.base_sql
                 return int(list(target.execute(f"SELECT COUNT(*) FROM ({sql} LIMIT 100000) AS s"))[0][0])
@@ -3072,7 +3079,7 @@ def why_empty(path: str, db: str = "", table: str = "") -> dict:
                 item["blocker"] = True
             out.append(item)
     finally:
-        target.close()
+        pick.close()
     return {"empty_sheets": len(empty), "sheets": out,
             "blocker_count": sum(1 for x in out if x.get("blocker"))}
 
