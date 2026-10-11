@@ -369,7 +369,44 @@ def drop_param_members(root, values: list, params: list = ()) -> dict:
     return {"members_dropped": dropped, "defaults_reset": defaults}
 
 
-_BRANCH_END = r"(?=\s*(?:WHEN\b|ELSEIF\b|ELSE\b|END\b))"
+_FORMULA_TOKEN = re.compile(
+    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|\[[^\]]*\]|//[^\n]*|[()]"
+    r"|\b(?:IF|CASE|END|WHEN|ELSEIF|ELSE)\b", re.I)
+
+
+def _branch_end(f: str, pos: int) -> int:
+    """Where the branch expression starting at `pos` ends: the next WHEN, ELSEIF, ELSE or END
+    of the same block. Brackets, nested IF/CASE ... END, strings and [fields] are stepped over."""
+    depth = 0
+    for m in _FORMULA_TOKEN.finditer(f, pos):
+        t = m.group(0).upper()
+        if t in ("(", "IF", "CASE"):
+            depth += 1
+        elif t == ")":
+            if depth == 0:
+                return m.start()
+            depth -= 1
+        elif t == "END":
+            if depth == 0:
+                return m.start()
+            depth -= 1
+        elif t in ("WHEN", "ELSEIF", "ELSE") and depth == 0:
+            return m.start()
+    return len(f)
+
+
+def _drop_branches(f: str, head: re.Pattern) -> tuple:
+    """`f` without every branch whose head matches, each cut up to the end of its expression."""
+    n = 0
+    while True:
+        m = head.search(f)
+        if not m:
+            return f, n
+        end = _branch_end(f, m.end())
+        while end > m.end() and f[end - 1].isspace():
+            end -= 1
+        f = f[:m.start()] + f[end:]
+        n += 1
 
 
 def drop_case_branches(root, values: list, calcs: list = ()) -> dict:
@@ -387,10 +424,10 @@ def drop_case_branches(root, values: list, calcs: list = ()) -> dict:
             continue
         for v in values:
             q = re.escape(v)
-            f, n = re.subn(rf"\s*WHEN\s+'{q}'\s+THEN\s+.*?{_BRANCH_END}", "", f, flags=re.S)
+            f, n = _drop_branches(f, re.compile(rf"\s*WHEN\s+'{q}'\s+THEN\s", re.S))
             branches += n
-            f, n = re.subn(rf"\s*(?:ELSEIF|IF)\s+[^\n]*?=\s*'{q}'\s+THEN\s+.*?{_BRANCH_END}",
-                           "", f, flags=re.S)
+            f, n = _drop_branches(f, re.compile(rf"\s*(?:ELSEIF|IF)\s+[^\n]*?=\s*'{q}'\s+THEN\s",
+                                                re.S))
             branches += n
             f, n = re.subn(rf"'{q}'\s*,\s*", "", f)
             in_items += n

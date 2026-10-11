@@ -1786,3 +1786,16 @@ def test_fit_tables_once_shares_a_set_band_and_keeps_multiline_titles():
     got = ED.fit_tables_once(root, {"A": {"head_lines": 2, "cols": [40, 60]},
                                     "B": {"head_lines": 2, "cols": [400, 60]}})
     assert got == {"header_px": {"A": 52}, "title_px": {}, "row_px": {}}
+
+
+def test_drop_case_branch_with_nested_if_and_brackets_keeps_the_formula_whole():
+    root = etree.fromstring(
+        "<workbook><datasources><datasource><column caption=' Level 1' name='[L1]'>"
+        "<calculation class='tableau' formula=\"CASE [Parameters].[p] WHEN 'a' THEN [x] "
+        "WHEN 'blocked' THEN STR(IF [b]=1 THEN 'blocked' Else '' END) "
+        "WHEN 'when' THEN (CASE [c] WHEN 1 THEN 'END' ELSE 'x' END) "
+        "WHEN 'z' THEN [z] END\"/></column></datasource></datasources></workbook>")
+    r = ED.drop_case_branches(root, ["blocked", "when"], [" Level 1"])
+    f = root.find(".//calculation").get("formula")
+    assert r["branches_removed"] == 2
+    assert f == "CASE [Parameters].[p] WHEN 'a' THEN [x] WHEN 'z' THEN [z] END"
