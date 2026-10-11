@@ -76,7 +76,8 @@ One kind of knowledge, one document; others link to it.
 3. `spec_reference` → `validate_spec` → build from `list_blocks`; edits through `edit_*`.
 4. `preflight`: every channel, plus what did not run.
 5. `frame_publish`: look at every page; fix what the critic reports.
-6. Tableau capture only where the frame model is known to be blind.
+6. Tableau capture only where the frame model is known to be blind: `mcp/twkit/README.md`,
+   "What the frame does not draw". `frame_publish(expand=True)` shows the page after show/hide clicks.
 
 Do not hand-write XML when a block exists, and do not put design rules in code: they live in
 `docs/DESIGN_KB.md`.
