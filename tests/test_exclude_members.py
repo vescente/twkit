@@ -130,7 +130,7 @@ def test_dry_run_sees_exclusion(tmp_path):
     after = {r.sheet: r for r in dryrun.dry_run(dst, limit=100)}
     assert after["flow sheet"].status == "ok"
     assert after["flow sheet"].rows == 1, after["flow sheet"].sql
-    assert "NOT (" in after["flow sheet"].sql
+    assert "NOT COALESCE(" in after["flow sheet"].sql
 
 
 def test_tuple_exclusion_translated_to_not_on_two_fields():
@@ -159,7 +159,7 @@ def test_tuple_exclusion_translated_to_not_on_two_fields():
 
     got = _except_conditions(etree.fromstring(xml), tr)
 
-    assert got == "(NOT (a IN ('x') AND b IN ('p', 'q')))"
+    assert got == "(NOT COALESCE(a IN ('x') AND b IN ('p', 'q'), FALSE))"
 
 
 def test_unknown_level_not_translated():
@@ -177,3 +177,38 @@ def test_unknown_level_not_translated():
     tr = Translator({}, {}, {}, {"a"}, dialect="hyper")
 
     assert _except_conditions(etree.fromstring(xml), tr) == ""
+
+
+@pytest.mark.parametrize("groupfilter, rows_kept", [
+    ("<groupfilter function='member' level='[none:dormant:nk]' member='true'/>", "Dormant"),
+    ("<groupfilter function='member' level='[none:dormant:nk]' member='false'/>", "other"),
+    ("<groupfilter function='except'><groupfilter function='level-members' level='[none:dormant:nk]'/>"
+     "<groupfilter function='member' level='[none:dormant:nk]' member='true'/></groupfilter>", "other"),
+])
+def test_dry_run_boolean_calc_filter_honours_false_and_except(tmp_path, groupfilter, rows_kept):
+    import zipfile
+
+    from lxml import etree
+
+    from twkit import dryrun, safexml
+    from tests.test_dryrun_two_extracts import _book
+
+    src = _book(tmp_path)
+    root = safexml.from_twbx(src)
+    ws = next(w for w in root.iter("worksheet") if w.get("name") == "flow sheet")
+    ds_name = ws.find("table/view/datasources/datasource").get("name")
+    ds = next(d for d in root.iter("datasource") if d.get("name") == ds_name and d.find("connection") is not None)
+    calc = etree.SubElement(ds, "column", {"datatype": "boolean", "name": "[dormant]",
+                                           "role": "dimension", "type": "nominal"})
+    etree.SubElement(calc, "calculation", {"class": "tableau", "formula": "[segment]='Dormant'"})
+    view = ws.find("table/view")
+    view.append(etree.fromstring(f"<filter class='categorical' column='[{ds_name}].[none:dormant:nk]'>"
+                                 f"{groupfilter}</filter>"))
+    body = etree.tostring(root, xml_declaration=True, encoding="utf-8", standalone=True)
+    dst = str(tmp_path / "bool.twbx")
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for n in zin.namelist():
+            zout.writestr(n, body if n.endswith(".twb") else zin.read(n))
+    r = {x.sheet: x for x in dryrun.dry_run(dst, limit=100)}["flow sheet"]
+    assert r.status == "ok" and r.rows == 1, r.sql
+    assert ("NOT (" in r.sql) == (rows_kept == "other"), r.sql

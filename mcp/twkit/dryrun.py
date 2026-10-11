@@ -1337,10 +1337,10 @@ def _except_conditions(fl, tr) -> str:
         return ""
     reorder = next((g for g in exc.iter("groupfilter")
                     if g.get("function") == "reorder-dimensionality"), None)
-    if reorder is None:
-        return ""
+    # one dimension, as Tableau writes "exclude": except(level-members, member | union of members)
+    src = reorder if reorder is not None else exc
     by_level: dict[str, list[str]] = {}
-    for mem in reorder.iter("groupfilter"):
+    for mem in src.iter("groupfilter"):
         if mem.get("function") != "member" or not mem.get("level"):
             continue
         raw = (mem.get("member") or "").strip()
@@ -1355,7 +1355,8 @@ def _except_conditions(fl, tr) -> str:
         if not cond:
             return ""
         parts.append(cond)
-    return "(NOT (" + " AND ".join(parts) + "))"
+    # Tableau keeps Null rows on "exclude" unless Null itself is excluded: NOT NULL is NULL in SQL
+    return "(NOT COALESCE(" + " AND ".join(parts) + ", FALSE))"
 
 
 def _member_in(level: str, vals: list, tr) -> str:
@@ -1382,11 +1383,24 @@ def _member_in(level: str, vals: list, tr) -> str:
     if agg in _TRUNC_SQL or agg in _DISCRETE_TRUNC:
         unit = _TRUNC_SQL.get(agg) or _DISCRETE_TRUNC[agg]
         expr = tr.d["trunc"].get(unit, tr.d["trunc"]["day"]).format(expr)
+    nulls = "%null%" in vals
+    vals = [v for v in vals if v != "%null%"]
     if vals and all(v.lower() in ("true", "false") for v in vals):
-        return f"{expr} IN ({', '.join(v.upper() for v in vals)})"
-    listed = ", ".join((f"TIMESTAMP '{v[1:-1]}'" if tr.dialect == "hyper" else f"toDateTime('{v[1:-1]}')")
-                       if re.fullmatch(r"#[\d\- :.]+#", v) else f"'{v}'" for v in vals)
-    return f"{expr} IN ({listed})"
+        cond = f"{expr} IN ({', '.join(v.upper() for v in vals)})"
+    elif vals:
+        listed = ", ".join((f"TIMESTAMP '{v[1:-1]}'" if tr.dialect == "hyper" else f"toDateTime('{v[1:-1]}')")
+                           if re.fullmatch(r"#[\d\- :.]+#", v) else _str_lit(v, tr.dialect) for v in vals)
+        cond = f"{expr} IN ({listed})"
+    else:
+        cond = ""
+    if nulls:
+        return f"({expr} IS NULL OR {cond})" if cond else f"{expr} IS NULL"
+    return cond
+
+
+def _str_lit(v: str, dialect: str) -> str:
+    """A member (quotes already doubled) as an SQL string: ClickHouse also reads a backslash."""
+    return "'" + (v.replace("\\", "\\\\") if dialect == "clickhouse" else v) + "'"
 
 
 def _is_aggregated(expr: str) -> bool:
@@ -2453,14 +2467,22 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
             return
         members = [g.get("member") for g in fl.iter("groupfilter") if g.get("member")]
         if field_name in tr.calcs:
-            boolean = any((mem or "").strip('"').lower() == "true" for mem in members)
             funcs = {g.get("function") for g in fl.iter("groupfilter")}
+            picked = {(mem or "").strip('"').lower() for mem in members}
+            boolean = bool(picked) and picked <= {"true", "false"}
+            if boolean:
+                keep = ({"true", "false"} - picked) if "except" in funcs else picked
+                if keep not in ({"true"}, {"false"}):
+                    return                         # both values, or none: no condition
+                negate = keep == {"false"}
             listed = _member_list(members, tr) if not boolean and members and \
                 fl.get("class") == "categorical" and not funcs - {"member", "union", None} else ""
             if not boolean and not listed:
                 return
             expr, why = tr.to_sql(tr.calcs[field_name])
             if not why and expr:
+                if boolean and negate:
+                    expr = f"NOT ({expr})"
                 cond = f"({expr})" if boolean else f"(({expr}) IN ({listed}))"
                 if _tc.has_table_calc(expr):
                     tc_filters.append((cond if not boolean else expr,
@@ -2489,6 +2511,12 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
         if not vals:
             return
         expr = tr.quote_ident(field_name)
+        if "%null%" in vals:                      # Tableau's Null member
+            rest = [v for v in vals if v != "%null%"]
+            cond = _member_in(m.group(1), vals, tr) if rest else f"{expr} IS NULL"
+            if cond:
+                wheres.append(f"({cond})")
+            return
         discrete = _discrete_date_in(expr, f_agg, vals, tr.dialect)
         if discrete:
             wheres.append(f"({discrete})")
@@ -2504,7 +2532,7 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
                 expr = tr.d["trunc"].get(unit, tr.d["trunc"]["day"]).format(expr)
             listed = ", ".join(
                 (f"TIMESTAMP '{v[1:-1]}'" if tr.dialect == "hyper" else f"toDateTime('{v[1:-1]}')")
-                if re.fullmatch(r"#[\d\- :.]+#", v) else f"'{v}'" for v in vals)
+                if re.fullmatch(r"#[\d\- :.]+#", v) else _str_lit(v, tr.dialect) for v in vals)
         wheres.append(f"({expr} IN ({listed}))")
 
     for fl in filter_sources:

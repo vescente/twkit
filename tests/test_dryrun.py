@@ -293,3 +293,27 @@ def test_shared_filters_reach_only_sheets_of_their_source():
     shared = list(root.find("shared-views").iter("filter"))
     got = dryrun.shared_filters_for(root.find(".//worksheet"), shared)
     assert [f.get("column") for f in got] == ["[A].[none:x:nk]"]
+
+
+class _Tr:
+    dialect, calcs, columns = "clickhouse", {}, {"Region"}
+    d = {"trunc": {"day": "toDate({})"}}
+
+    @staticmethod
+    def quote_ident(n):
+        return n
+
+
+def test_tableau_exclude_form_becomes_a_null_safe_not():
+    from lxml import etree
+    fl = etree.fromstring("""<filter class='categorical' column='[ds].[none:Region:nk]'>
+      <groupfilter function='except'><groupfilter function='level-members' level='[none:Region:nk]'/>
+      <groupfilter function='member' level='[none:Region:nk]' member='&quot;East&quot;'/></groupfilter></filter>""")
+    assert dryrun._except_conditions(fl, _Tr) == "(NOT COALESCE(Region IN ('East'), FALSE))"
+
+
+def test_null_member_is_is_null_and_backslash_is_escaped():
+    assert dryrun._member_in("[none:Region:nk]", ["%null%"], _Tr) == "Region IS NULL"
+    assert dryrun._member_in("[none:Region:nk]", ["%null%", "East"], _Tr) == \
+        "(Region IS NULL OR Region IN ('East'))"
+    assert dryrun._member_in("[none:Region:nk]", ["a\\b"], _Tr) == "Region IN ('a\\\\b')"
