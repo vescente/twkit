@@ -481,12 +481,12 @@ def add_case_branches(root, calcs: list, branches: dict) -> dict:
         if calc is None:
             continue
         f = calc.get("formula") or ""
-        if "CASE" not in f or not f.rstrip().endswith("END"):
+        if not re.search(r"\bCASE\b", f, re.I) or not f.rstrip().upper().endswith("END"):
             continue
         tail = f.rstrip()[:-3].rstrip()
         grew = False
         for member, expr in branches.items():
-            if re.search(rf"WHEN\s+'{re.escape(member)}'\s+THEN", f):
+            if re.search(rf"WHEN\s+'{re.escape(member)}'\s+THEN", f, re.I):
                 continue
             tail += f"\nWHEN '{member}' THEN {expr}"
             added += 1

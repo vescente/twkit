@@ -1799,3 +1799,13 @@ def test_drop_case_branch_with_nested_if_and_brackets_keeps_the_formula_whole():
     f = root.find(".//calculation").get("formula")
     assert r["branches_removed"] == 2
     assert f == "CASE [Parameters].[p] WHEN 'a' THEN [x] WHEN 'z' THEN [z] END"
+
+
+def test_add_case_branches_reads_keywords_in_any_case():
+    root = etree.fromstring(
+        "<workbook><datasources><datasource><column caption='_m' name='[_m]'>"
+        "<calculation class='tableau' formula=\"Case [Parameters].[p] WHEN 'a' THEN 1 end\"/>"
+        "</column></datasource></datasources></workbook>")
+    r = ED.add_case_branches(root, ["_m"], {"b": "2"})
+    assert r["branches_added"] == 1
+    assert root.find(".//calculation").get("formula").endswith("WHEN 'b' THEN 2\nEND")
