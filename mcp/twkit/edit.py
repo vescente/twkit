@@ -1158,7 +1158,7 @@ def retune_categorical_filter(root, field: str, values: list) -> int:
     """Rebuild the value enumeration of a filter."""
     fixed = 0
     for f in root.iter("filter"):
-        if field not in (f.get("column") or ""):
+        if not mentions(f.get("column") or "", field):      # Region is not Region Name
             continue
         union = next((g for g in f.iter("groupfilter")
                       if g.get("function") == "union"), None)
@@ -2627,12 +2627,28 @@ def _u(attr: str) -> str:
     return "{%s}%s" % (_USER_NS, attr)
 
 
-def _quote_member(value: str) -> str:
-    """Wrap a string filter value in quotes as Tableau expects."""
+def _datatype_of(root, field: str) -> str:
+    """Declared datatype of a field (by name or caption), or ""."""
+    for c in root.iter("column"):
+        if (c.get("name") or "").strip("[]") == field or (c.get("caption") or "") == field:
+            if c.get("datatype"):
+                return c.get("datatype")
+    return ""
+
+
+def _quote_member(value: str, datatype: str = "") -> str:
+    """Wrap a string filter value in quotes as Tableau expects: by the field's type when known
+    ("1234" on a string field stays a string), else by the look of the value."""
     v = str(value or "")
     if not v or v.startswith('"'):
         return v
-    if v.lower() in ("true", "false", "%null%", "%all%"):
+    if v.lower() in ("%null%", "%all%"):
+        return v
+    if datatype == "string":
+        return f'"{v}"'
+    if datatype in ("integer", "real", "boolean"):
+        return v
+    if v.lower() in ("true", "false"):
         return v
     try:
         float(v.replace(",", "."))
@@ -2644,7 +2660,7 @@ def _quote_member(value: str) -> str:
 def apply_filter(root, sheets: list, column: str, *, derivation: str = "None",
                  member: str = "", context: bool = False, kind: str = "") -> dict:
     """The same filter ON ALL listed sheets; `kind` (nk, ok, qk) keeps the instance the sheet has."""
-    member = _quote_member(member)
+    member = _quote_member(member, _datatype_of(root, column))
     kind = kind or {"None": "nk", "Sum": "qk", "CountD": "qk"}.get(derivation, "nk")
 
     put = []

@@ -1826,3 +1826,18 @@ def test_rename_worksheet_refuses_a_taken_name():
     with pytest.raises(ValueError, match="already exists"):
         ED.rename_worksheet(root, "A", "B")
     assert [w.get("name") for w in root.iter("worksheet")] == ["A", "B"]
+
+
+def test_member_quoted_by_field_type():
+    assert ED._quote_member("1234", "string") == '"1234"'
+    assert ED._quote_member("1234", "integer") == "1234"
+    assert ED._quote_member("true", "boolean") == "true"
+    assert ED._quote_member("East") == '"East"' and ED._quote_member("12") == "12"
+
+
+def test_retune_does_not_touch_a_longer_name():
+    root = _tree("""<workbook><worksheets><worksheet name='S'><table><view>
+      <filter class='categorical' column='[ds].[none:Region Name:nk]'>
+        <groupfilter function='member' level='[none:Region Name:nk]' member='&quot;x&quot;'/></filter>
+    </view></table></worksheet></worksheets></workbook>""")
+    assert ED.retune_categorical_filter(root, "Region", ["East"]) == 0
