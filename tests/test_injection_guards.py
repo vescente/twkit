@@ -264,3 +264,15 @@ def test_a_query_never_chooses_the_output_format():
 def test_unbalanced_brackets_are_refused(sql):
     with pytest.raises(PermissionError, match="unbalanced"):
         chsafe.read_only(sql)
+
+
+def test_arithmetic_before_a_bracket_is_not_a_table_function():
+    # Hyper SQL from a dry run: a quoted column plus a bracket is arithmetic, not a call
+    sql = ('SELECT EXTRACT(DOW FROM (("Call Date" + (CAST(CURRENT_DATE AS DATE) - 1)))) '
+           'FROM "Extract"."Extract"')
+    assert chsafe.read_only(sql) == sql
+
+
+def test_a_call_off_the_list_is_still_refused_after_an_operator():
+    with pytest.raises(PermissionError, match="not on the allowed list"):
+        chsafe.read_only("SELECT 1 + 2 FROM t, generateSeries2(1, 5)")

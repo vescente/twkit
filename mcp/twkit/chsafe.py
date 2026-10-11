@@ -249,6 +249,9 @@ _CLAUSE_END = {"WHERE", "PREWHERE", "GROUP", "ORDER", "LIMIT", "HAVING", "UNION"
                "FORMAT", "WINDOW", "QUALIFY", "INTERSECT", "EXCEPT", "OFFSET", "SAMPLE"}
 
 
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def _table_functions(code: str) -> list:
     """Names called in a table position: after FROM, JOIN, IN, or a comma inside a FROM list.
 
@@ -256,7 +259,8 @@ def _table_functions(code: str) -> list:
     A bracket opening SELECT or WITH is a subquery wherever it stands (`view(SELECT ...)`), and a
     bracket in a table position keeps the position (`FROM (f(...))`).
     """
-    toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[(),]", code)
+    # operators stay tokens: `a + (b)` is arithmetic, not a call of `a`
+    toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[(),]|[^\sA-Za-z0-9_(),]+", code)
     calls, in_from, found = [], [False], []
 
     def tok(k):
@@ -273,7 +277,8 @@ def _table_functions(code: str) -> list:
         prev = tok(k - 1)
         if t == "(":
             sub = tok(k + 1) in ("SELECT", "WITH")
-            calls.append(not sub and k > 0 and toks[k - 1] not in "()," and prev not in _NOT_CALLS)
+            calls.append(not sub and k > 0 and _IDENT.fullmatch(toks[k - 1]) is not None
+                         and prev not in _NOT_CALLS)
             in_from.append(not sub and not calls[-1] and table_pos(k, bracket=True))
             continue
         if t == ")":
@@ -286,7 +291,7 @@ def _table_functions(code: str) -> list:
             in_from[-1] = True
         elif up in _CLAUSE_END:
             in_from[-1] = False
-        if t in "()," or up in _NOT_CALLS or tok(k + 1) != "(":
+        if _IDENT.fullmatch(t) is None or up in _NOT_CALLS or tok(k + 1) != "(":
             continue
         if table_pos(k):
             found.append(t)
