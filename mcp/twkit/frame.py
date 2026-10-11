@@ -1138,17 +1138,28 @@ def _legend_html(z, ws, d: dict, root) -> str:
     return head
 
 
+# Tableau's own show/hide icons when the button has no image or caption: state 0 — the
+# item is shown (the button hides it), state 1 — the item is hidden (the button shows it)
+_TOGGLE_GLYPHS = ("\u2715", "\u2261")
+
+
 def _button_html(btn, assets: dict) -> str:
-    st = btn.find("button-visual-state")
-    if st is None:
+    states = btn.findall("button-visual-state")
+    if not states:
         return ""
+    raw = btn.get("active-visual-state-index") or "0"
+    idx = int(raw) if raw.isdigit() else 0
+    st = states[min(idx, len(states) - 1)]
     img = (st.findtext("image-path") or "").strip()
     if img and assets.get(img):
         return (f"<img src='{_esc(assets[img])}' style='width:100%;height:100%;"
                 f"object-fit:contain;display:block'>")
     cap = st.findtext("caption") or ""
+    size = 11
+    if not cap and not img and btn.find("toggle-action") is not None:
+        cap, size = _TOGGLE_GLYPHS[min(idx, 1)], 15
     fs = st.find("button-caption-font-style")
-    css = ["display:flex;align-items:center;justify-content:center;height:100%;font-size:11px"]
+    css = [f"display:flex;align-items:center;justify-content:center;height:100%;font-size:{size}px"]
     if fs is not None:
         if _hex(fs.get("fontcolor")):
             css.append(f"color:{_hex(fs.get('fontcolor'))}")
@@ -1176,8 +1187,27 @@ def _control_text(z, ze, root, sheets: dict, pcap: dict, pval: dict, pfmt: dict)
     field = _field_of(z.param)
     cap = _caption_of(root, field) if root is not None else field
     if title is None:
+        own = _quick_filter_title(sheets.get(z.name), z.param)
+        if own is not None:
+            ft = own.find("formatted-text")
+            title = (_runs_html(ft) if ft is not None
+                     else f"<b class='lbl'>{_esc(own.get('value') or '')}</b>")
+    if title is None:
         title = f"<b class='lbl'>{_esc(cap or z.name)}</b>"
-    return title, _filter_state(sheets.get(z.name), z.param)
+    return title, _filter_state(sheets.get(z.name), z.param, root)
+
+
+def _quick_filter_title(ws, param: str):
+    """A filter card's own title: Tableau keeps it in the sheet style, not on the zone."""
+    if ws is None or not param:
+        return None
+    for rule in ws.iter("style-rule"):
+        if rule.get("element") != "quick-filter":
+            continue
+        for f in rule.findall("format"):
+            if f.get("attr") == "title" and f.get("field") == param:
+                return f
+    return None
 
 
 def _field_of(param: str) -> str:
@@ -1195,13 +1225,38 @@ def _caption_of(root, field: str) -> str:
     return field
 
 
-def _filter_state(ws, param: str) -> str:
+def _relative_date_text(fl) -> str:
+    """The card text of a relative date filter, as Tableau words it."""
+    unit = (fl.get("period-type-v2") or fl.get("period-type") or "day").lower()
+    try:
+        first, last = int(fl.get("first-period") or 0), int(fl.get("last-period") or 0)
+    except ValueError:
+        return "(All)"
+    if unit == "day" and first == last:
+        return {0: "Today", -1: "Yesterday", 1: "Tomorrow"}.get(first, f"{first:+d} days")
+    if first == last:
+        return {0: f"This {unit}", -1: f"Previous {unit}", 1: f"Next {unit}"}.get(
+            first, f"{first:+d} {unit}s")
+    if last == 0 and first < 0:
+        return f"Last {1 - first} {unit}s"
+    if first == 0 and last > 0:
+        return f"Next {last + 1} {unit}s"
+    return f"{first:+d} to {last:+d} {unit}s"
+
+
+def _filter_state(ws, param: str, root=None) -> str:
     if ws is None or not param:
         return "(All)"
-    inst = re.findall(r"\[[^\]]+\]", param)[-1]
-    for fl in ws.iter("filter"):
+    refs = re.findall(r"\[[^\]]+\]", param)
+    inst, source = refs[-1], (refs[0].strip("[]") if len(refs) > 1 else "")
+    shared = [fl for sv in (root.iter("shared-view") if root is not None else ())
+              if sv.get("name") == source
+              for fl in sv.findall("filter")]   # filters applied to every sheet of a source
+    for fl in list(ws.iter("filter")) + shared:
         if not (fl.get("column") or "").endswith(inst):
             continue
+        if fl.get("class") == "relative-date":
+            return _relative_date_text(fl)
         funcs = {g.get("function") for g in fl.iter("groupfilter")}
         if "except" in funcs or "level-members" in funcs and "member" not in funcs:
             return "(All)"
