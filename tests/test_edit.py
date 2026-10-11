@@ -1852,3 +1852,19 @@ def test_drop_fields_takes_one_operand_off_a_dual_axis():
     ED.drop_fields(root, ["a"])
     assert root.findtext(".//rows") == "[ds].[sum:b:qk]"
     assert [p.get("id") for p in root.iter("pane")] == ["2"]
+
+
+def test_field_resolved_in_the_sheets_own_source():
+    root = _tree("""<workbook><datasources>
+      <datasource name='A'><column caption='NGR' name='[Calculation_1]' datatype='real' role='measure'
+        type='quantitative'><calculation class='tableau' formula='SUM([a])'/></column></datasource>
+      <datasource name='B'><column caption='NGR' name='[Calculation_2]' datatype='real' role='measure'
+        type='quantitative'><calculation class='tableau' formula='SUM([b])'/></column></datasource>
+    </datasources><worksheets><worksheet name='S'><table><view>
+      <datasources><datasource name='B'/></datasources>
+      <datasource-dependencies datasource='B'/></view></table></worksheet></worksheets></workbook>""")
+    ws = root.find(".//worksheet")
+    ref, inst = ED._instance_ref(root, ws, "NGR", "User")
+    assert ref == "[B].[usr:Calculation_2:qk]", ref
+    dep = ws.find(".//datasource-dependencies")
+    assert dep.find("column").find("calculation").get("formula") == "SUM([b])"

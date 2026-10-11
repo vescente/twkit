@@ -2521,23 +2521,29 @@ _DERIV_PREFIX = {"User": "usr", "Sum": "sum", "CountD": "ctd", "Count": "cnt",
                  "Week-Trunc": "twk", "Day-Trunc": "tdy"}
 
 
+def _declared(root, ws, field: str, role: str = ""):
+    """A field's declaration as the sheet sees it: its own data source first (a calculation
+    preferred), then the others. Two sources can carry the same name with different formulas."""
+    own = _ds_name(ws) if ws is not None else ""
+    sources = [d for d in root.findall("datasources/datasource") if d.get("name") != "Parameters"]
+    sources.sort(key=lambda d: d.get("name") != own)
+    bare = field.strip("[]")
+    for d in sources:
+        hits = [c for c in d.findall("column")
+                if ((c.get("name") or "").strip("[]") == bare or (c.get("caption") or "") == field)
+                and not (role and c.get("role") and c.get("role") != role)]
+        if hits:
+            return next((c for c in hits if c.find("calculation") is not None), hits[0])
+    return None
+
+
 def _instance_ref(root, ws, column: str, derivation: str, kind: str = "",
                   role: str = ""):
     """Declare a field and its instance in a sheet, return `([ds].[inst], inst)`."""
     ds = _ds_name(ws)
-    src = None
-    for dsn in root.iter("datasource"):
-        for c in dsn.findall("column"):
-            nm = (c.get("name") or "").strip("[]")
-            if role and c.get("role") and c.get("role") != role:
-                continue
-            if nm == column or (c.get("caption") or "") == column:
-                if src is None or c.find("calculation") is not None:
-                    src, column = c, nm
-                if c.find("calculation") is not None:
-                    break
-        if src is not None and src.find("calculation") is not None:
-            break
+    src = _declared(root, ws, column, role)
+    if src is not None:
+        column = (src.get("name") or "").strip("[]")
     if src is None:
         for c in root.iter("column"):
             if c.getparent() is not None and c.getparent().tag == "columns" \
@@ -3992,16 +3998,11 @@ def _dim_ref(root, ws, field: str, force: str = "") -> str:
     """A field reference as Tableau writes it: `[ds].[none:field:nk]`."""
     ds = _ds_name(ws)
     name, kind = field.strip("[]"), "nk"
-    for c in root.iter("column"):
-        anc = next(c.iterancestors("datasource"), None)
-        if anc is not None and anc.get("name") == "Parameters":
-            continue
-        nm = (c.get("name") or "").strip("[]")
-        if nm == name or (c.get("caption") or "") == field:
-            name = nm
-            kind = (_BY_TYPE.get(c.get("type") or "")
-                    or _BY_DATATYPE.get(c.get("datatype") or "", "nk"))
-            break
+    c = _declared(root, ws, field)
+    if c is not None:
+        name = (c.get("name") or "").strip("[]")
+        kind = (_BY_TYPE.get(c.get("type") or "")
+                or _BY_DATATYPE.get(c.get("datatype") or "", "nk"))
     if force:
         want = f"[{ds}].[none:{name}:{force}]"
         if _instance_on_sheet(ws, ds, name) != want:
@@ -4332,8 +4333,7 @@ _TIP_BREAK = "\u00c6\n"
 def _auto_ref(root, ws, field: str, derivation: str = "") -> str:
     """Field reference for substitution: a dimension as is, a measure with an aggregate."""
     bare = field.strip("[]")
-    col = next((c for d in root.iter("datasource") for c in d.findall("column")
-                if (c.get("name") or "").strip("[]") == bare or (c.get("caption") or "") == field), None)
+    col = _declared(root, ws, field)
     if col is None:
         # a raw field of a text/extract source is declared only in the relation's column list
         col = next((c for c in root.iter("column") if c.getparent() is not None
@@ -4486,10 +4486,9 @@ def remove_field(root, sheet: str, field: str, shelf: str = "") -> dict:
 
     ds = _ds_name(ws)
     name = field.strip("[]")
-    for c in root.iter("column"):
-        if (c.get("caption") or "") == field:
-            name = (c.get("name") or "").strip("[]")
-            break
+    c = _declared(root, ws, field)
+    if c is not None:
+        name = (c.get("name") or "").strip("[]")
 
     def matches(ref: str) -> bool:
         inner = ref.split("].[", 1)[1].rstrip("]") if "].[" in ref else ref.strip("[]")
