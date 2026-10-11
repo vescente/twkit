@@ -150,3 +150,34 @@ def test_extract_replaces_its_own_previous_extract(tmp_path, monkeypatch):
     ds = safexml.from_twbx(second).find("datasources/datasource")
     assert len(ds.findall("extract")) == 1
     assert len(ds.findall("object-graph/objects/object/properties[@context='extract']")) == 1
+
+
+_DESKTOP_SQL = "SELECT 1 WHERE a &gt;&gt;= 1 AND b &lt;&lt; 2"   # as Desktop saves `a >= 1 AND b < 2`
+
+
+def _desktop_book(tmp_path):
+    p = tmp_path / "Desktop.twbx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("Book.twb", _TWB.replace(">SELECT 1<", f">{_DESKTOP_SQL}<"))
+    return str(p)
+
+
+def test_workbook_sql_undoes_desktop_doubling(tmp_path):
+    assert EX.workbook_sql(_desktop_book(tmp_path)) == "SELECT 1 WHERE a >= 1 AND b < 2"
+
+
+def test_extract_sends_plain_sql_and_keeps_desktop_form(tmp_path, monkeypatch):
+    from twkit import safexml
+    seen = []
+
+    def fake_hyper(sql, out, table, types=None):
+        seen.append(sql)
+        open(out, "wb").write(b"hyper")
+        return {"rows": 1, "columns": 1}
+
+    monkeypatch.setattr(EX, "build_hyper_from_sql", fake_hyper)
+    out = str(tmp_path / "Desktop (extract).twbx")
+    assert EX.to_extract(_desktop_book(tmp_path), out)["ok"]
+    assert seen == ["SELECT 1 WHERE a >= 1 AND b < 2"], seen
+    rel = safexml.from_twbx(out).find(".//connection/relation[@type='text']")
+    assert rel.text == "SELECT 1 WHERE a >>= 1 AND b << 2", "the SQL under the extract stays as Desktop wrote it"

@@ -24,7 +24,7 @@ from `preflight`. Add a row when you add a module.
 | `docs.py` | output | workbook passport for colleagues: pages, sheets, formulas |
 | `dryrun.py` | channel: data | sheets translated to SQL and executed before handover |
 | `edit.py` | edit | operations on an existing workbook: fields, sheets, pages, zones, filters, format |
-| `extract.py` | channel: source | database table to `.hyper` extract; extract references; `to_extract` packages the workbook's Custom SQL as an extract with the SQL kept underneath (refreshable on a server) |
+| `extract.py` | channel: source | database table to `.hyper` extract; extract references; `to_extract` packages the workbook's Custom SQL as an extract with the SQL kept underneath (refreshable on a server); the SQL is sent with Tableau's doubled `<<` / `>>` undone |
 | `frame.py` | view | the workbook rendered as HTML and measured in Chrome (`frame_publish`); workbook colours and fonts reach CSS only after a strict check, and each page runs only its own script (CSP) |
 | `fields.py` | build | field expressions (`SUM(sales)`, `MONTH(date)`) and their sheet instances; what aggregates |
 | `framecmp.py` | calibration | frame images against Tableau Public renders, per zone (OCR and ink) |

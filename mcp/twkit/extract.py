@@ -519,13 +519,14 @@ _PD_TO_HYPER = {"int64": "big_int", "int32": "big_int", "float64": "double",
 
 
 def workbook_sql(book_path: str) -> str:
-    """Custom SQL of a workbook."""
+    """Custom SQL of a workbook, with Tableau's doubled `<` and `>` undone."""
     from twkit import safexml
+    from twkit.dryrun import unescape_sql
     root = (safexml.from_twbx(book_path) if book_path.lower().endswith(".twbx")
             else safexml.from_file(book_path))
     for rel in root.iter("relation"):
         if rel.get("type") == "text" and (rel.text or "").strip():
-            return rel.text
+            return unescape_sql(rel.text)
     return ""
 
 
@@ -774,6 +775,7 @@ def to_extract(book_path: str, out_path: str = "", table: str = "Extract") -> di
     import zipfile
     from . import order as ORD
     from . import safexml
+    from .dryrun import unescape_sql
     from .owner import check_write
 
     root = (safexml.from_twbx(book_path) if book_path.lower().endswith(".twbx")
@@ -801,7 +803,7 @@ def to_extract(book_path: str, out_path: str = "", table: str = "Extract") -> di
             while hyper_rel in members:
                 hyper_rel = hyper_rel[:-6] + "_.hyper"
             hyper_abs = os.path.join(work, f"{len(members)}.hyper")
-            res = build_hyper_from_sql(rel.text, hyper_abs, table, types=types)
+            res = build_hyper_from_sql(unescape_sql(rel.text), hyper_abs, table, types=types)
             for old in ds.findall("extract"):
                 dropped.update(c.get("dbname") for c in old.iter("connection") if c.get("dbname"))
                 ds.remove(old)
