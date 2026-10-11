@@ -546,6 +546,19 @@ def marks_shown(ws, ref: str = "") -> bool:
     return bool(st["labels"]) or ws.find(".//customized-label") is not None
 
 
+def _is_date_ref(root, ws, ref: str) -> bool:
+    """Is the field behind a shelf reference a date (Tableau draws Automatic marks over it as a line)."""
+    name = ref.strip("[]").split(":")
+    name = name[1] if len(name) >= 3 else ref.strip("[]")
+    for c in (ws.iter("column") if ws is not None else ()):
+        if (c.get("name") or "").strip("[]") == name:
+            return c.get("datatype") in ("date", "datetime")
+    for c in (root.iter("column") if root is not None else ()):
+        if (c.get("name") or "").strip("[]") == name:
+            return c.get("datatype") in ("date", "datetime")
+    return False
+
+
 def folded(ws, scope: str) -> tuple:
     from .dryrun import inst_refs
     shelf = list(dict.fromkeys(r for r in _shelf_refs(ws, scope) if re.search(r":qk(:\d+)?\]$", r))) \
@@ -1143,12 +1156,12 @@ def _legend_html(z, ws, d: dict, root) -> str:
 _TOGGLE_GLYPHS = ("\u2715", "\u2261")
 
 
-def _button_html(btn, assets: dict) -> str:
+def _button_html(btn, assets: dict, opened: bool = False) -> str:
     states = btn.findall("button-visual-state")
     if not states:
         return ""
     raw = btn.get("active-visual-state-index") or "0"
-    idx = int(raw) if raw.isdigit() else 0
+    idx = 0 if opened else (int(raw) if raw.isdigit() else 0)
     st = states[min(idx, len(states) - 1)]
     img = (st.findtext("image-path") or "").strip()
     if img and assets.get(img):
@@ -1313,6 +1326,14 @@ def _mark_text_color(ws) -> str:
     return INK
 
 
+def total_label(ws) -> str:
+    """The grand total's row label: the sheet's own (`total-label`), else Tableau's default."""
+    for f in (ws.iter("format") if ws is not None else ()):
+        if f.get("attr") == "total-label" and f.get("data-class") == "total" and f.get("value"):
+            return f.get("value")
+    return "Grand Total"
+
+
 def _render_crosstab(ws, rows, ndims: int, refs: list, caps: list, masks: list,
                      fit: str = "", sized: bool = False, mref: str = "") -> str | None:
     cols = _shelf_refs(ws, "cols")
@@ -1352,7 +1373,7 @@ def _render_crosstab(ws, rows, ndims: int, refs: list, caps: list, masks: list,
     flcss = field_label_css(ws, rules)
     vcss = text_css(ws, "cell", mref, rules)
     head = [(caps[i] if i < len(caps) and shown else "", "lbl", flcss) for i in ri] + \
-        [(lab[k], "lbl num", hcss) for k in keys] + ([("Grand Total", "lbl num")] if ct and add else [])
+        [(lab[k], "lbl num", hcss) for k in keys] + ([(total_label(ws), "lbl num")] if ct and add else [])
 
     def tot(vals):
         xs = [_num(v) for v in vals if _num(v) is not None]
@@ -1362,7 +1383,7 @@ def _render_crosstab(ws, rows, ndims: int, refs: list, caps: list, masks: list,
             ([(tot(grid[rk].values()), "num", "font-weight:600")] if ct and add else [])
             for rk in order[:300]]
     if rt and add and ri:
-        gt = [("Grand Total", "lbl", "font-weight:600")] + [("", "lbl", "")] * (len(ri) - 1) + \
+        gt = [(total_label(ws), "lbl", "font-weight:600")] + [("", "lbl", "")] * (len(ri) - 1) + \
             [(tot(grid[rk].get(k) for rk in order), "num", "font-weight:600") for k in keys] + \
             ([(tot(v for rk in order for v in grid[rk].values()), "num", "font-weight:600")] if ct else [])
         body = [gt] + body if top else body + [gt]
@@ -1632,7 +1653,7 @@ def _render_table(rows, ndims: int, captions: list, masks: list | None = None,
         body.append(tds)
     rt, _ct, top = grand_totals(ws)
     if rt and rows and ndims and mrefs and any(additive(m) for m in mrefs):
-        gt = [("Grand Total", "lbl", "font-weight:600")] + [("", "lbl", "")] * (ndims - 1)
+        gt = [(total_label(ws), "lbl", "font-weight:600")] + [("", "lbl", "")] * (ndims - 1)
         for i in range(ndims, n):
             m = mrefs[i - ndims] if i - ndims < len(mrefs) else ""
             xs = [_num(r[i]) for r in rows if _num(r[i]) is not None]
@@ -2021,7 +2042,30 @@ class _CMap(dict):
         v = super().get(k)
         if v is None:
             v = super().get(str(k).lower())
+        if v is None and (k is None or str(k) in ("", "None", "null")):
+            v = super().get("%null%")                 # Tableau's key for an empty value
         return d if v is None else v
+
+
+def measure_names_color(root, ws, ref: str) -> str | None:
+    """Colour of a measure whose pane is coloured by Measure Names: the workbook's colour map."""
+    from .dryrun import inst_refs
+    for p in (ws.iter("pane") if ws is not None else ()):
+        ax = p.get("y-axis-name") or p.get("x-axis-name") or ""
+        enc = p.find("encodings/color")
+        if (inst_refs(ax) or [""])[0] != ref or enc is None or \
+                not (enc.get("column") or "").endswith("[:Measure Names]"):
+            continue
+        source = enc.get("column")[1:].split("].[", 1)[0]
+        for ds in (root.findall("datasources/datasource") if root is not None else ()):
+            if ds.get("name") != source or ds.find("style") is None:
+                continue
+            for e in ds.find("style").iter("encoding"):
+                if e.get("attr") == "color" and e.get("field") == "[:Measure Names]":
+                    for m in e.findall("map"):
+                        if (m.findtext("bucket") or "").strip('"') == f"[{source}].{ref}":
+                            return _hex(m.get("to"))
+    return None
 
 
 def _render_bars(rows, ndims: int, cap: str, mask: str = "", h: float = 0.0,
@@ -2323,10 +2367,10 @@ def _render_cols(rows, ndims: int, cap: str, mask: str, h: float, cmap: dict | N
                  overlay: list | None = None, sync: bool = True, marks_on: bool = True,
                  ws=None, aref: str = "", mrefs: list | None = None,
                  consts: dict | None = None) -> str:
-    data = [r for r in rows if r and _num(r[-1]) is not None]
+    data = [r for r in rows if r and len(r) > vi and _num(r[vi]) is not None]
     if not data:
         return "<div class='empty'>no data</div>"
-    hi = max(abs(_num(r[-1])) for r in data) or 1.0
+    hi = max(abs(_num(r[vi])) for r in data) or 1.0
     vals = sorted({str(r[color_i]) for r in data}) if color_i is not None else []
     auto = {v: PALETTE[k % len(PALETTE)] for k, v in enumerate(vals)}
     H = max(30.0, h - 40)
@@ -2336,11 +2380,11 @@ def _render_cols(rows, ndims: int, cap: str, mask: str, h: float, cmap: dict | N
         groups: dict = {}
         for r in data:
             groups.setdefault(tuple(str(r[i]) for i in range(ndims) if i != color_i), []).append(r)
-        hi = max(sum(abs(_num(r[-1])) for r in g) for g in groups.values()) or 1.0
+        hi = max(sum(abs(_num(r[vi])) for r in g) for g in groups.values()) or 1.0
         for k, g in groups.items():
             segs = []
             for r in sorted(g, key=lambda r: str(r[color_i])):
-                v = _num(r[-1])
+                v = _num(r[vi])
                 hh = max(0.5, abs(v) / hi * H)
                 key = str(r[color_i])
                 col = (cmap or {}).get(key) or auto.get(key, _MARK["color"])
@@ -2829,6 +2873,66 @@ def fit_rows(body: str, kind: str, fit: str) -> str:
     return f"<div class='fitv' data-fit='{_esc(fit)}'>{body}</div>"
 
 
+def _toggle_targets(dash) -> dict:
+    """{zone id: button zone id} for every show/hide button of the page."""
+    out = {}
+    zs = dash.find("zones")
+    for ze in (zs if zs is not None else dash).iter("zone"):
+        b = ze.find("button")
+        if b is None:
+            continue
+        m = re.search(r"zone-ids=\[([^\]]*)\]", b.findtext("toggle-action") or "")
+        for t in (m.group(1).split(",") if m else ()):
+            out[t.strip()] = ze.get("id")
+    return out
+
+
+def _move(node, pos: str, size: str, start: float, new: float) -> None:
+    """Move a zone and everything inside it to `start` along one axis, resized to `new`."""
+    old_start, old = getattr(node, pos), getattr(node, size)
+    k = new / old if old else 1.0
+    for d in node.walk():
+        setattr(d, pos, start + (getattr(d, pos) - old_start) * k)
+        setattr(d, size, getattr(d, size) * k)
+
+
+def expand_toggles(dash, tree: list) -> set:
+    """The page after clicking every show/hide button whose item is hidden: the item shows at
+    its stored size and the other zones of its flow container share what is left, as in
+    Tableau. Returns the ids of the buttons that were clicked."""
+    targets = _toggle_targets(dash)
+    if not targets:
+        return set()
+    nodes, parents = {}, {}
+    stack = [(t, None) for t in tree]
+    while stack:
+        n, p = stack.pop()
+        nodes[n.id], parents[n.id] = n, p
+        stack.extend((c, n) for c in n.children)
+    opened = set()
+    for tid, bid in targets.items():
+        n = nodes.get(tid)
+        if n is None or not n.hidden:
+            continue
+        for d in n.walk():
+            d.hidden = False
+        opened.add(bid)
+        p = parents.get(tid)
+        if p is None or p.kind != "layout-flow":
+            continue
+        pos, size = ("y", "h") if p.flow == "vert" else ("x", "w")
+        shown = [c for c in p.children if not c.hidden]
+        rest = [c for c in shown if c is not n]
+        free = max(0.0, getattr(p, size) - getattr(n, size))
+        used = sum(getattr(c, size) for c in rest) or 1.0
+        cur = getattr(p, pos)
+        for c in sorted(shown, key=lambda c: getattr(c, pos)):
+            new = getattr(n, size) if c is n else getattr(c, size) * free / used
+            _move(c, pos, size, cur, new)
+            cur += new
+    return opened
+
+
 def _walk_parent(node, parent=None):
     if getattr(node, "hidden", False) and not os.environ.get("TWKIT_FRAME_SHOW_HIDDEN"):
         return
@@ -3078,9 +3182,10 @@ def measure_order(root, ws, d: dict) -> dict:
 
 
 def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
-               assets: dict | None = None, dyn: dict | None = None) -> str:
+               assets: dict | None = None, dyn: dict | None = None, expand: bool = False) -> str:
     cw, ch, mode = LM.dashboard_size(dash)
     tree = R._build_tree(dash, cw, ch)
+    opened = expand_toggles(dash, tree) if expand else set()
     swap = _swap_state(root) if root is not None else {}
     pcap, pval = {}, {}
     for d in (root.iter("datasource") if root is not None else ()):
@@ -3278,9 +3383,11 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                             ax_ = next((r_ for r_, m_, _s in fold_ if m_ == "Bar"), fold_[0][0])
                             vi_ = ndims + mrefs_.index(ax_)
                             amap_ = dict(zip(d.get("mrefs") or [], d.get("amasks") or []))
-                            ov_ = [(ndims + mrefs_.index(r_), m_, s_, masks[ndims + mrefs_.index(r_)]
+                            auto_ = "Line" if _is_date_ref(root, ws, refs_[0]) else "Bar"
+                            ov_ = [(ndims + mrefs_.index(r_), auto_ if m_ == "Automatic" else m_, s_,
+                                    masks[ndims + mrefs_.index(r_)]
                                     if ndims + mrefs_.index(r_) < len(masks) else "",
-                                    pane_style(ws, r_)["color"],
+                                    pane_style(ws, r_)["color"] or measure_names_color(root, ws, r_),
                                     None if axis_hidden(ws, r_) else amap_.get(r_, ""))
                                    for r_, m_, s_ in fold_ if r_ != ax_]
                             cap = caps[vi_] if vi_ < len(caps) else cap
@@ -3288,7 +3395,8 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                         am_ = dict(zip(d.get("mrefs") or [], d.get("amasks") or [])).get(ax_, "")
                         body = _render_cols(rows, ndims, cap, mask, h - ttl_h, cmap=cm_, color_i=ci_,
                                             labels=dim_labels(ws, refs_, rows, ndims, masks),
-                                            stack=ci_ is not None and cref_ not in cols_,
+                                            stack=ci_ is not None and cref_ not in cols_ and not (
+                                                ov_ and len({str(r_[ci_]) for r_ in rows}) <= 1),
                                             amask=None if axis_hidden(ws, ax_) or ax_ not in
                                             _shelf_refs(ws, "rows") + cols_ else am_,
                                             vi=vi_, overlay=ov_, sync=sync_,
@@ -3360,7 +3468,7 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
             elif z.kind == "dashboard-object" and zone_el.get(z.id) is not None and \
                     zone_el[z.id].find("button") is not None:
                 parts.append(f"<div class='zone' {attrs} style='{box}'>"
-                             f"{_button_html(zone_el[z.id].find('button'), assets or {})}</div>")
+                             f"{_button_html(zone_el[z.id].find('button'), assets or {}, z.id in opened)}</div>")
             elif z.kind == "bitmap" and (assets or {}).get(z.param):
                 fit = "contain" if z.scaled else "none"
                 parts.append(f"<div class='zone' {attrs} style='{box}'>"
@@ -3376,7 +3484,8 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
             f"<title>{_esc(title)} · {_esc(name)}</title>"
             f"<style>{font_css()}{CSS}</style></head><body>"
             f"<div class='canvas' data-page='{_esc(name)}' style='width:{cw}px;height:{ch}px'>"
-            f"{''.join(parts)}</div><div class='stamp'>FRAME - a model, not Tableau - {cw}x{ch} {mode}</div>"
+            f"{''.join(parts)}</div><div class='stamp'>FRAME - a model, not Tableau - {cw}x{ch} {mode}"
+            f"{' - show/hide buttons clicked' if opened else ''}</div>"
             f"<script>{js}</script></body></html>")
 
 
@@ -3462,7 +3571,10 @@ def _default_out(path: str) -> str:
     return os.path.join(os.path.dirname(ap), "_frame")
 
 
-def publish(path: str, out_dir: str = "", limit: int = 300, default_locale: str = "") -> dict:
+def publish(path: str, out_dir: str = "", limit: int = 300, default_locale: str = "",
+            expand: bool = False) -> dict:
+    """Every dashboard as an HTML page. `expand`: the pages after clicking every show/hide
+    button whose item is hidden (files `page_NN_open.html`)."""
     from .lint import load
     book = load(path)
     root = book.root
@@ -3497,18 +3609,19 @@ def publish(path: str, out_dir: str = "", limit: int = 300, default_locale: str 
     pages = []
     for i, dash in enumerate(root.iter("dashboard"), 1):
         name = dash.get("name") or f"page {i}"
-        fn = f"page_{i:02d}.html"
+        fn = f"page_{i:02d}{'_open' if expand else ''}.html"
         with open(os.path.join(dst, fn), "w", encoding="utf-8") as f:
-            f.write(_page_html(name, dash, sheets, data, title, root, assets, dyn))
+            f.write(_page_html(name, dash, sheets, data, title, root, assets, dyn, expand))
         pages.append({"page": name, "file": os.path.join(dst, fn)})
     links = "".join(f"<li><a href='{os.path.basename(p['file'])}'>{_esc(p['page'])}</a></li>"
                     for p in pages)
-    with open(os.path.join(dst, "index.html"), "w", encoding="utf-8") as f:
+    with open(os.path.join(dst, "index_open.html" if expand else "index.html"), "w",
+              encoding="utf-8") as f:
         f.write(f"<!doctype html><meta charset='utf-8'>{_csp()}<title>{_esc(title)}</title>"
                 f"<h3 style='font-family:Arial'>{_esc(title)}</h3><ol>{links}</ol>")
     return {"book": title, "folder": dst, "pages": pages, "data": note or "present",
-            "how_to_view": "chrome-devtools new_page('file://' + page file); "
-                           "measure with evaluate_script(frame.PROBE_JS)"}
+            "how_to_view": "each page measures itself on load (PROBE_JS); frame.check renders "
+                           "and reads it in headless Chrome"}
 
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -3596,8 +3709,8 @@ def _probe_oneshot(page_file: str, shot: str = "") -> dict:
 
 
 def check(path: str, out_dir: str = "", limit: int = 300, shots: bool = True,
-          default_locale: str = "") -> dict:
-    pub = publish(path, out_dir=out_dir, limit=limit, default_locale=default_locale)
+          default_locale: str = "", expand: bool = False) -> dict:
+    pub = publish(path, out_dir=out_dir, limit=limit, default_locale=default_locale, expand=expand)
     pages = []
     for p in pub["pages"]:
         shot = p["file"].replace(".html", ".png") if shots else ""

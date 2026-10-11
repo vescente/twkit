@@ -86,3 +86,76 @@ def test_sort_by_a_measure_the_view_lacks_keeps_the_order():
     ws = etree.fromstring("<worksheet><table><view><computed-sort column='[ds].[none:X:nk]' "
                           "direction='DESC' using='[ds].[max:Other:qk]'/></view></table></worksheet>")
     assert FR.computed_order(ws, rows, 1, ["[none:X:nk]"], ["[sum:Y:qk]"]) == rows
+
+
+from twkit import render as R
+
+
+_DASH = """<dashboard name='D'><size maxheight='500' maxwidth='1000' minheight='500' minwidth='1000'/>
+<zones><zone id='1' type-v2='layout-flow' param='horz' x='0' y='0' w='100000' h='100000'>
+  <zone id='3' name='table' x='0' y='0' w='100000' h='100000'/>
+  <zone id='30' type-v2='layout-flow' param='horz' hidden-by-user='true' x='50000' y='0' w='50000' h='100000'>
+    <zone id='31' name='chart' hidden-by-user='true' x='50000' y='0' w='40000' h='100000'/>
+    <zone id='33' name='chart' type-v2='color' hidden-by-user='true' x='90000' y='0' w='10000' h='100000'/>
+  </zone></zone>
+  <zone id='34' type-v2='dashboard-object' x='97000' y='0' w='2000' h='3000'>
+    <button action='' active-visual-state-index='1'><toggle-action>tabdoc:toggle-button-click-action
+      zone-id='34' zone-ids=[30]</toggle-action><button-visual-state/><button-visual-state/></button>
+  </zone></zones></dashboard>"""
+
+
+def test_clicked_show_button_opens_the_item_and_neighbours_share_the_rest():
+    dash = etree.fromstring(_DASH)
+    tree = R._build_tree(dash, 1000, 500)
+    assert FR.expand_toggles(dash, tree) == {"34"}
+    z = {n.id: n for t in tree for n in t.walk()}
+    assert not z["30"].hidden and not z["31"].hidden and not z["33"].hidden
+    assert (round(z["3"].x), round(z["3"].w)) == (0, 500)          # the table gives up half
+    assert (round(z["30"].x), round(z["30"].w)) == (500, 500)      # the chart keeps its size
+    assert (round(z["31"].x), round(z["33"].x)) == (500, 900)      # its legend moves with it
+
+
+def test_clicked_button_draws_the_hide_icon():
+    b = etree.fromstring(_DASH).find(".//button")
+    assert "≡" in FR._button_html(b, {}) and "✕" in FR._button_html(b, {}, opened=True)
+
+
+def test_empty_value_takes_the_null_colour():
+    assert FR._CMap({"%null%": "#7fa6a8"}).get("None") == "#7fa6a8"
+
+
+_ROOT = """<workbook><datasources><datasource name='ds'>
+  <column name='[Period]' datatype='date'/><column name='[Level]' datatype='string'/>
+  <style><style-rule element='mark'><encoding attr='color' field='[:Measure Names]' type='palette'>
+    <map to='#9e3d22'><bucket>"[ds].[usr:line:qk]"</bucket></map></encoding></style-rule></style>
+</datasource></datasources></workbook>"""
+_TREND = """<worksheet name='T'><table><panes>
+  <pane id='1' y-axis-name='[ds].[usr:bar:qk]'><mark class='Bar'/></pane>
+  <pane id='2' y-axis-name='[ds].[usr:line:qk]'><mark class='Automatic'/>
+    <encodings><color column='[ds].[:Measure Names]'/></encodings></pane>
+</panes></table></worksheet>"""
+
+
+def test_second_axis_takes_its_measure_colour():
+    assert FR.measure_names_color(etree.fromstring(_ROOT), etree.fromstring(_TREND), "[usr:line:qk]") == "#9e3d22"
+    assert FR.measure_names_color(etree.fromstring(_ROOT), etree.fromstring(_TREND), "[usr:bar:qk]") is None
+
+
+def test_automatic_mark_over_a_date_is_a_line():
+    root = etree.fromstring(_ROOT)
+    assert FR._is_date_ref(root, None, "[none:Period:ok]")
+    assert not FR._is_date_ref(root, None, "[none:Level:nk]")
+
+
+def test_stacked_columns_read_the_bar_measure_not_the_last_column():
+    rows = [["2026-10-01", "Asia", "289", "22.8"], ["2026-10-01", "CIS", "100", "18.0"]]
+    html = FR._render_cols(rows, 2, "FTD", "", 300, color_i=1, stack=True, vi=2)
+    assert ">289<" in html and ">22.8<" not in html
+
+
+def test_grand_total_takes_the_sheet_label():
+    ws = etree.fromstring("<worksheet><table><style><style-rule element='header'>"
+                          "<format attr='total-label' data-class='total' field='[ds].[none:A:nk]' "
+                          "value='Total'/></style-rule></style></table></worksheet>")
+    assert FR.total_label(ws) == "Total"
+    assert FR.total_label(etree.fromstring("<worksheet/>")) == "Grand Total"

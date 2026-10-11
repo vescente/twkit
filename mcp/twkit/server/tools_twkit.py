@@ -725,19 +725,23 @@ def tableau_sign_in() -> str:
     return json.dumps(SHOT.ensure_signed_in(), ensure_ascii=False, indent=2)
 
 @server.tool()
-def frame_publish(path: str, out_dir: str = "", limit: int = 300) -> str:
-    """FRAME: publish a workbook as a local HTML page to view in Chrome.
+def frame_publish(path: str, out_dir: str = "", limit: int = 300, expand: bool = False) -> str:
+    """FRAME: publish a workbook's dashboards as local HTML pages to view in Chrome.
 
     Works without Tableau and with a locked screen. Zones come from XML pixels, sheets from
     real data (dry run), numbers from `default-format` masks, sheet swaps from the current
-    parameter value. It is a MODEL (stamped on the page): a difference from a real render is a
-    finding about the model, not the workbook. To measure, open the file in Chrome and run
-    `PROBE_JS` (returned here) for clipped labels and overflowing zones.
+    parameter value. Zones hidden by the author are not drawn, as in Tableau. It is a MODEL
+    (stamped on the page): a difference from a real render is a finding about the model, not
+    the workbook. Each page measures itself on load (`PROBE_JS`, returned here: clipped labels,
+    overflowing zones); `frame.check` renders the pages in headless Chrome and reads the result.
+    `expand=True`: the pages after clicking every show/hide button whose item is hidden
+    (`page_NN_open.html`): the item shows at its stored size, its neighbours share the rest.
+    What the model does not draw: mcp/twkit/README.md, "What the frame does not draw".
     """
     from twkit import frame as FR
     if not os.path.exists(path):
         return f"ERROR: file not found: {path}"
-    res = FR.publish(path, out_dir=out_dir, limit=limit)
+    res = FR.publish(path, out_dir=out_dir, limit=limit, expand=expand)
     res["PROBE_JS"] = FR.PROBE_JS
     return json.dumps(res, ensure_ascii=False, indent=2)
 
