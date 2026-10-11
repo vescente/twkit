@@ -1526,13 +1526,30 @@ def test_batch_rename_edits_formulas_and_shelves():
     assert "[Deposits] * 2" in blob
 
 
-def test_rename_refuses_on_nested_names():
+def test_rename_of_nested_names_is_exact():
     root = _tree("""<workbook><datasources><datasource name='ds'>
       <column name='[Level 1]'><calculation formula='1'/></column>
-      <column name='[ Level 1]'><calculation formula='2'/></column>
+      <column name='[ Level 1]'><calculation formula='[Level 1] + 2'/></column>
     </datasource></datasources></workbook>""")
-    with pytest.raises(ValueError, match="substring"):
-        ED.rename_fields(root, {"Level 1": "A", " Level 1": "B"})
+    ED.rename_fields(root, {"Level 1": "A", " Level 1": "B"})
+    cols = {c.get("name"): c.find("calculation").get("formula") for c in root.iter("column")}
+    assert cols == {"[A]": "1", "[B]": "[A] + 2"}
+
+
+def test_rename_leaves_captions_titles_and_sql_alone():
+    root = _tree("""<workbook><datasources><datasource name='ds'>
+      <connection><relation type='text'>SELECT ftd AS FTD FROM t</relation>
+        <metadata-records><metadata-record><remote-name>FTD</remote-name><local-name>[FTD]</local-name>
+        </metadata-record></metadata-records></connection>
+      <column name='[FTD]' caption='FTD count'/>
+    </datasource></datasources>
+    <worksheets><worksheet name='w'><title><run>FTD trend</run></title>
+      <rows>[ds].[sum:FTD:qk]</rows></worksheet></worksheets></workbook>""")
+    ED.rename_field(root, "FTD", "ftd_users")
+    assert root.findtext(".//relation") == "SELECT ftd AS FTD FROM t"
+    assert root.findtext(".//run") == "FTD trend" and root.find(".//column").get("caption") == "FTD count"
+    assert root.findtext(".//rows") == "[ds].[sum:ftd_users:qk]"
+    assert root.findtext(".//remote-name") == "ftd_users" and root.findtext(".//local-name") == "[ftd_users]"
 
 
 def test_rename_refuses_on_taken_name_and_on_missing_one():
@@ -1868,3 +1885,24 @@ def test_field_resolved_in_the_sheets_own_source():
     assert ref == "[B].[usr:Calculation_2:qk]", ref
     dep = ws.find(".//datasource-dependencies")
     assert dep.find("column").find("calculation").get("formula") == "SUM([b])"
+
+
+def test_caption_copies_follow_the_caption():
+    root = _tree("""<workbook><datasources><datasource name='ds'>
+      <column name='[Chart Color Dim]' caption='chart Color' datatype='string'/>
+      <column name='[Other]' caption='chart Color x' datatype='string'/></datasource></datasources>
+      <actions><action><command command='tsc:brush'><param name='field-captions' value='chart Color'/>
+      </command></action></actions>
+      <worksheets><worksheet name='T'><table><style>
+        <style-rule element='legend-title-text'><format attr='color' field='[ds].[none:Chart Color Dim:nk]'
+          value='chart Color'><formatted-text><run>chart Color</run></formatted-text></format></style-rule>
+        <style-rule element='quick-filter'><format attr='title' field='[ds].[none:Chart Color Dim:nk]'
+          value='chart Color'><formatted-text><run>chart Color</run></formatted-text></format></style-rule>
+      </style><panes><pane><customized-tooltip><formatted-text><run>chart Color:\t</run>
+        <run>&lt;[ds].[none:Chart Color Dim:nk]&gt;</run><run>chart Color x:\t</run><run>&lt;[ds].[none:Other:nk]&gt;</run>
+      </formatted-text></customized-tooltip></pane></panes></table></worksheet></worksheets></workbook>""")
+    ED.set_caption(root, "Chart Color Dim", "Chart color")
+    assert root.find(".//param").get("value") == "Chart color"
+    assert [r.text for r in root.iter("run")][:2] == ["Chart color", "Chart color"]
+    tips = [r.text for r in root.find(".//customized-tooltip").iter("run")]
+    assert tips[0] == "Chart color:\t" and tips[2] == "chart Color x:\t"

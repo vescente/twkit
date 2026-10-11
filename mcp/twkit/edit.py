@@ -278,20 +278,33 @@ def retype_ref(token: str, field: str) -> str:
 
 
 def rename_field(root, old: str, new: str) -> int:
-    """Rename a field throughout the document."""
+    """Rename a field wherever Tableau delimits its name: `[old]` (declarations, formulas, shelves,
+    folders), `:old:` (column instances), `[old (Table)]` (the same column from a join), and the
+    exact text of `remote-name` / `remote-alias`. Text that merely contains the name (captions,
+    titles, Custom SQL) is left alone: a bare replace hit ordinary words and the SQL."""
+    from xml.sax.saxutils import escape
     from . import safexml
     blob = etree.tostring(root, encoding="unicode")
-    if old not in blob:
+    o, w = escape(old), escape(new)
+    n = 0
+    for a, b in ((f"[{o}]", f"[{w}]"), (f":{o}:", f":{w}:")):
+        n += blob.count(a)
+        blob = blob.replace(a, b)
+    blob, k = re.subn(r"\[" + re.escape(o) + r"( \([^\[\]()]*\))\]", lambda m: f"[{w}{m.group(1)}]", blob)
+    n += k
+    blob, k = re.subn(r"<(remote-name|remote-alias)>" + re.escape(o) + r"</\1>",
+                      lambda m: f"<{m.group(1)}>{w}</{m.group(1)}>", blob)
+    n += k
+    if not n:
         return 0
-    n = blob.count(old)
-    new_root = safexml.from_bytes(blob.replace(old, new).encode())
+    new_root = safexml.from_bytes(blob.encode())
     par = root.getparent()
     if par is not None:
         par.replace(root, new_root)
     else:
         root.clear()
-        for k, v in new_root.attrib.items():
-            root.set(k, v)
+        for k_, v in new_root.attrib.items():
+            root.set(k_, v)
         for child in list(new_root):
             root.append(child)
     return n
@@ -318,16 +331,12 @@ def set_formula(root, calc: str, formula: str) -> dict:
 
 
 def rename_fields(root, mapping: dict) -> dict:
-    """Rename SEVERAL fields at once, refusing dangerous pairs."""
+    """Rename SEVERAL fields at once; refuses a missing old name or a taken new one."""
     pairs = {str(k).strip("[]"): str(v).strip("[]") for k, v in mapping.items()}
     if not pairs:
         return {"field_count": 0, "replacements": 0}
 
     problems = []
-    for a in pairs:
-        for b in pairs:
-            if a != b and a in b:
-                problems.append(f"{a!r} is a substring of {b!r}")
     have = {(c.get("name") or "").strip("[]") for c in root.iter("column")}
     for old in pairs:
         if old not in have:
@@ -903,14 +912,59 @@ def reorder_pages(root, order: list) -> dict:
 
 
 def set_caption(root, name: str, caption: str) -> int:
-    """Caption of a field or parameter, what a person sees in the workbook."""
-    fixed = 0
+    """Caption of a field or parameter, what a person sees in the workbook.
+
+    Tableau also copies the caption as text into an action's `field-captions`, a filter card's
+    title, a legend title and a tooltip label ("Date: <field>"); those copies follow too, or the
+    highlight action stops finding its field and the old name stays on screen."""
+    fixed, names, olds = 0, set(), set()
     for c in root.iter("column"):
         nm = (c.get("name") or "").strip("[]")
         if nm == name or (c.get("caption") or "") == name:
+            olds.add(c.get("caption") or nm)
+            names.add(nm)
             c.set("caption", caption)
             fixed += 1
+    olds.discard(caption)
+    if fixed and olds:
+        fixed += caption_copies(root, names, olds, caption)
     return fixed
+
+
+def caption_copies(root, names: set, olds: set, caption: str) -> int:
+    """Text copies of a field's caption, set to the new one (see set_caption)."""
+    n = 0
+    for p in root.iter("param"):                          # highlight / filter actions
+        if p.get("name") == "field-captions" and p.getparent().tag == "command":
+            items = (p.get("value") or "").split(",")
+            new = [caption if it in olds else it for it in items]
+            if new != items:
+                p.set("value", ",".join(new))
+                n += 1
+    on_field = lambda ref: any(f":{nm}:" in ref or f"[{nm}]" in ref for nm in names)
+    for rule in root.iter("style-rule"):                   # filter card and legend titles
+        if rule.get("element") not in ("quick-filter", "legend-title-text"):
+            continue
+        for f in rule.findall("format"):
+            if not on_field(f.get("field") or ""):
+                continue
+            if f.get("value") in olds:
+                f.set("value", caption)
+                n += 1
+            for r in f.iter("run"):
+                if r.text in olds:
+                    r.text = caption
+                    n += 1
+    for ft in root.iter("formatted-text"):                 # tooltip label: "Old:<tab><[ds].[field]>"
+        if ft.getparent() is None or ft.getparent().tag != "customized-tooltip":
+            continue
+        runs = list(ft.findall("run"))
+        for a, b in zip(runs, runs[1:]):
+            m = re.fullmatch(r"(.+?)(:\s*)", a.text or "", re.S)
+            if m and m.group(1) in olds and on_field(b.text or ""):
+                a.text = caption + m.group(2)
+                n += 1
+    return n
 
 
 def dedupe_shelves(root) -> int:
