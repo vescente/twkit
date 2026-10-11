@@ -35,6 +35,7 @@ class SheetResult:
     note: str = ""
     base_sql: str = ""
     where_sql: str = ""
+    nodate_where_sql: str = ""     # the WHERE without date filters: why_empty tells period from defect
     synthetic_measure: bool = False
     relaxed: str = ""
     dim_exprs: list = field(default_factory=list)
@@ -1483,7 +1484,9 @@ class _ClickhouseTarget:
         self.dialect = "clickhouse"
         self._ch = config.clickhouse(read_only=True)
         self.table = f"{db}.{table}"
-        self.columns = {f["name"] for f in fetch_schema(db, table)}
+        schema = fetch_schema(db, table)
+        self.columns = {f["name"] for f in schema}
+        self.date_cols = {f["name"] for f in schema if f.get("datatype") in ("date", "datetime")}
 
     @_chsafe.guard
     def execute(self, sql: str):
@@ -1503,7 +1506,10 @@ class _CustomSqlTarget:
         self._ch = config.clickhouse(read_only=True)
         _chsafe.read_only(sql)
         self.table = f"(\n{sql}\n) AS q"
-        self.columns = {r[0] for r in self._ch.execute(f"DESCRIBE ({sql})")}
+        desc = list(self._ch.execute(f"DESCRIBE ({sql})"))
+        self.columns = {r[0] for r in desc}
+        self.date_cols = {r[0] for r in desc
+                          if re.match(r"(Nullable\()?(LowCardinality\()?Date", str(r[1]))}
 
     @_chsafe.guard
     def execute(self, sql: str):
@@ -2444,6 +2450,13 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     tc_filters: list = []
     havings: list[str] = []
     filter_sources = list(ws.iter("filter")) + shared_filters_for(ws, shared_filters)
+    date_conds: list[str] = []                    # relative date filters: dates by construction
+    date_cols = getattr(target, "date_cols", set()) or set()
+
+    def _on_dates(cond: str) -> bool:
+        """A condition from a date filter: relative date, or one that reads a date column."""
+        return cond in date_conds or any(
+            re.search(r'(?<![\w"])"?' + re.escape(c) + r'"?(?![\w"])', cond) for c in date_cols)
 
     def _dim_filter(fl) -> None:
         col = fl.get("column") or ""
@@ -2464,6 +2477,7 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
             cond = _relative_where(fl, f_agg, field_name, tr, target, dynamic)
             if cond:
                 wheres.append(cond)
+                date_conds.append(cond)
             return
         members = [g.get("member") for g in fl.iter("groupfilter") if g.get("member")]
         if field_name in tr.calcs:
@@ -2573,6 +2587,8 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     extra = {"base_sql": base, "dim_exprs": dims, "measure_exprs": measures,
              "dim_labels": dlab, "measure_labels": mlab, "dim_refs": dref, "measure_refs": mref,
              "where_sql": (" WHERE " + " AND ".join(wheres)) if wheres else "",
+             "nodate_where_sql": (" WHERE " + " AND ".join(w for w in wheres if not _on_dates(w)))
+             if any(not _on_dates(w) for w in wheres) else "",
              "synthetic_measure": synthetic,
              "relaxed": ("not computed: " + ", ".join(dropped[:6]) +
                          ("; marked * - a dimension was dropped, the grid differs from the real one"
@@ -3015,21 +3031,28 @@ def why_empty(path: str, db: str = "", table: str = "") -> dict:
     try:
         for r in empty:
             item = {"sheet": r.sheet}
+            def count(where: str) -> int:
+                sql = r.base_sql.replace(r.where_sql, where) if r.where_sql else r.base_sql
+                return int(list(target.execute(f"SELECT COUNT(*) FROM ({sql} LIMIT 100000) AS s"))[0][0])
             try:
-                bare = r.base_sql.replace(r.where_sql, "") if r.where_sql else r.base_sql
-                rows = target.execute(f"SELECT COUNT(*) FROM ({bare} LIMIT 100000) AS s")
-                n = int(list(rows)[0][0])
+                n_period = count(r.nodate_where_sql)          # only the date filters removed
+                n_all = count("") if not n_period else n_period
             except Exception as exc:
                 item["reason"] = f"not installed: {str(exc)[:80]}"
+                item["blocker"] = True
                 out.append(item)
                 continue
-            if n == 0:
-                item["reason"] = "no data even without filters: workbook defect"
+            if n_period:
+                item["reason"] = (f"{n_period} rows without the date filters: empty due to the default "
+                                  f"period; the extract is probably older than the period")
+                item["blocker"] = False
+            elif n_all:
+                item["reason"] = (f"{n_all} rows without filters, none without the date filters only: "
+                                  f"a filter excludes every row (a member not in the data?)")
                 item["blocker"] = True
             else:
-                item["reason"] = (f"{n} rows without filters: empty due to the default period; "
-                                   f"the extract is probably older than the period")
-                item["blocker"] = False
+                item["reason"] = "no data even without filters: workbook defect"
+                item["blocker"] = True
             out.append(item)
     finally:
         target.close()

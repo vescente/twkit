@@ -104,7 +104,8 @@ def preflight(path: str, db: str = "", table: str = "",
                             f"{broken[0].sheet} — {(broken[0].note or '')[:70]}")
         if empty:
             why, _e = _safe(dryrun.why_empty, path, db, table)
-            hard = [x for x in ((why or {}).get("sheets") or []) if x.get("blocker")]
+            # a sheet whose cause could not be established counts as a blocker
+            hard = [x for x in ((why or {}).get("sheets") or []) if x.get("blocker") is not False]
             soft = [x for x in ((why or {}).get("sheets") or []) if x.get("blocker") is False]
             if hard:
                 blockers.append("empty sheets: "

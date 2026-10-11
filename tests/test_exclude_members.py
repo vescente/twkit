@@ -212,3 +212,28 @@ def test_dry_run_boolean_calc_filter_honours_false_and_except(tmp_path, groupfil
     r = {x.sheet: x for x in dryrun.dry_run(dst, limit=100)}["flow sheet"]
     assert r.status == "ok" and r.rows == 1, r.sql
     assert ("NOT (" in r.sql) == (rows_kept == "other"), r.sql
+
+
+def test_why_empty_blames_a_filter_that_excludes_everything(tmp_path):
+    import zipfile
+
+    from lxml import etree
+
+    from twkit import dryrun, safexml
+    from tests.test_dryrun_two_extracts import _book
+
+    src = _book(tmp_path)
+    root = safexml.from_twbx(src)
+    ws = next(w for w in root.iter("worksheet") if w.get("name") == "main sheet")
+    ds_name = ws.find("table/view/datasources/datasource").get("name")
+    ws.find("table/view").append(etree.fromstring(
+        f"<filter class='categorical' column='[{ds_name}].[none:metric:nk]'>"
+        f"<groupfilter function='member' level='[none:metric:nk]' member='&quot;GGRR&quot;'/></filter>"))
+    body = etree.tostring(root, xml_declaration=True, encoding="utf-8", standalone=True)
+    dst = str(tmp_path / "typo.twbx")
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for n in zin.namelist():
+            zout.writestr(n, body if n.endswith(".twb") else zin.read(n))
+    w = dryrun.why_empty(dst)
+    item = next(x for x in w["sheets"] if x["sheet"] == "main sheet")
+    assert item["blocker"] is True and "excludes every row" in item["reason"], item
