@@ -1,4 +1,4 @@
-"""Where twkit gets its settings from: the environment, then `~/.twkit/config.toml`."""
+"""Where twkit gets its settings from: the environment, `~/.twkit/.env`, `~/.twkit/config.toml`."""
 from __future__ import annotations
 
 import os
@@ -9,6 +9,7 @@ from . import chclient, chsafe
 
 ENV_PREFIX = "TWKIT_DB_"
 CONFIG_PATH = os.path.expanduser("~/.twkit/config.toml")
+ENV_FILE = os.path.expanduser("~/.twkit/.env")
 
 _FIELDS = ("host", "port", "user", "name", "password")
 _CH_FIELDS = ("ch_host", "ch_port", "ch_user", "ch_db", "ch_password", "ch_cert")
@@ -25,6 +26,30 @@ def _env_name(field: str) -> str:
     """`ch_host` → `TWKIT_CH_HOST`, `host` → `TWKIT_DB_HOST`."""
     bare = field[3:] if field in _CH_FIELDS else field
     return _prefix(field) + bare.upper()
+
+
+@lru_cache(maxsize=1)
+def _from_env_file() -> dict:
+    """`TWKIT_*` assignments in `~/.twkit/.env` (template: `example.env`); other lines are ignored."""
+    try:
+        with open(ENV_FILE, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return {}
+    out = {}
+    for line in lines:
+        key, sep, value = line.strip().removeprefix("export ").partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if sep and key.startswith("TWKIT_"):
+            out[key] = value
+    return out
+
+
+def _env(key: str) -> str:
+    """A `TWKIT_*` value from the process environment, then from `~/.twkit/.env`."""
+    return os.environ.get(key) or _from_env_file().get(key) or ""
 
 
 @lru_cache(maxsize=1)
@@ -51,7 +76,7 @@ def _section(name: str) -> dict:
 
 def path(name: str, default: str = "") -> str:
     """Location of user data kept outside the repository."""
-    value = os.environ.get(f"TWKIT_{name.upper()}") or _section("paths").get(name) or default
+    value = _env(f"TWKIT_{name.upper()}") or _section("paths").get(name) or default
     return os.path.expanduser(value) if value else ""
 
 
@@ -59,7 +84,7 @@ def get(field: str, default: str = "") -> str:
     """One setting, from the first source that has it."""
     if field not in _ALL_FIELDS:
         raise KeyError(f"unknown setting {field!r}; known: {sorted(_ALL_FIELDS)}")
-    env = os.environ.get(_env_name(field))
+    env = _env(_env_name(field))
     if env:
         return env
     value = _from_file().get(field)
@@ -70,6 +95,8 @@ def source_of(field: str) -> str:
     """Which source answered — useful when the value is not what someone expected."""
     if os.environ.get(_env_name(field)):
         return "environment"
+    if _from_env_file().get(_env_name(field)):
+        return ENV_FILE
     if _from_file().get(field) not in (None, ""):
         return CONFIG_PATH
     return "not configured"
@@ -94,13 +121,13 @@ def missing_reason(*fields: str) -> str:
         return ""
     section = "[clickhouse]" if all(f in _CH_FIELDS for f in absent) else "[database]"
     return (f"database settings missing: {', '.join(absent)}. "
-            f"Set {', '.join(_env_name(f) for f in absent)}, "
-            f"or add a {section} section to {CONFIG_PATH}")
+            f"Set {', '.join(_env_name(f) for f in absent)} in the environment or in "
+            f"{ENV_FILE} (template: example.env), or add a {section} section to {CONFIG_PATH}")
 
 
 def reset_cache() -> None:
     """Forget cached sources."""
-    for source in (_from_file, _section):
+    for source in (_from_env_file, _from_file, _section):
         source.cache_clear()
 
 

@@ -18,7 +18,7 @@ from `preflight`. Add a row when you add a module.
 | `chsafe.py` | security | keep secrets out of ClickHouse tracebacks; SQL from a workbook or a tool runs only as one read statement: `ReadOnlyClient` checks it lexically (`read_only`), then by ClickHouse's own parse (`EXPLAIN AST`, `ast_read_only`) of the exact statement that runs (`SELECT * FROM (<sql>)`, as Tableau runs Custom SQL), with `readonly=1`; the output format is pinned and the parse tree must be complete; text that ClickHouse and Hyper would read differently (nested comments, a lone `\r`, backslash quotes, `$`, `#`, curly quotes and any non-ASCII outside a string) is refused; table functions are checked in every table position, inside `view(SELECT ...)` and bracketed `FROM (...)` too |
 | `contentfit.py` | build | sizes from content: table column widths, header bands, title room; layout rows that keep tables at content height |
 | `conn.py` | build | data source connections: CSV, Hyper (several tables related on a shared column), MySQL table or Custom SQL |
-| `config.py` | settings | where connection parameters and data paths come from: the environment, then `~/.twkit/config.toml` |
+| `config.py` | settings | where connection parameters and data paths come from: the environment, `~/.twkit/.env` (template `example.env`), then `~/.twkit/config.toml` |
 | `csvcheck.py` | channel: csv | will Tableau's text connector read the CSV dates and numbers, or Null |
 | `dash.py` | build | dashboards from a layout tree: zones, controls, legends, actions |
 | `docs.py` | output | workbook passport for colleagues: pages, sheets, formulas |

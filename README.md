@@ -32,8 +32,9 @@ Register the server in the MCP client (`.mcp.json`):
 
 ## Configure
 
-Settings live in `~/.twkit/config.toml`; `show_config` reports what resolved (a password only as
-present or absent). Each setting comes from the environment first, then from the file:
+Connection settings and secrets live in `~/.twkit/.env` (copy `example.env`, `chmod 600`); paths and
+guards in `~/.twkit/config.toml`. `show_config` reports what resolved, a password only as present or
+absent. Each setting comes from the process environment, then `~/.twkit/.env`, then the file:
 
 | what | environment | file |
 |---|---|---|

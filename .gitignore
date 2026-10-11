@@ -19,5 +19,7 @@ _shots/
 _sketch/
 _work_b/
 
-# environment files may hold secrets: never published
+# environment files may hold secrets: never published; only the empty template is
 .env*
+*.env
+!example.env
