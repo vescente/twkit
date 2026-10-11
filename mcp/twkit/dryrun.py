@@ -1519,6 +1519,21 @@ class _CustomSqlTarget:
         pass
 
 
+_PARAM_TOKEN = re.compile(r"<\[Parameters\]\.\[[^\]]+\]>")
+
+
+def escape_sql(text: str) -> str:
+    """Custom SQL as Tableau Desktop stores it: `<` and `>` doubled, parameter tokens
+    (`<[Parameters].[Name]>`) left as they are."""
+    out, pos = [], 0
+    for m in _PARAM_TOKEN.finditer(text or ""):
+        out.append(text[pos:m.start()].replace("<", "<<").replace(">", ">>"))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append((text or "")[pos:].replace("<", "<<").replace(">", ">>"))
+    return "".join(out)
+
+
 def unescape_sql(text: str) -> str:
     """Unescape comparison operators in Custom SQL read from the workbook (Tableau doubles `>` and `<` on save)."""
     for bad, good in ((">>=", ">="), ("<<=", "<="), (">>", ">"), ("<<", "<")):

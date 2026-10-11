@@ -95,7 +95,8 @@ def _relation(parent, connection: str, name: str, table: str, kind: str = "table
         rel.set("table", table)
     rel.set("type", kind)
     if sql:
-        rel.text = sql
+        from .dryrun import escape_sql
+        rel.text = escape_sql(sql)          # as Desktop stores it: `<` and `>` doubled
     return rel
 
 

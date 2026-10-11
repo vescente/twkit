@@ -1305,6 +1305,12 @@ def sync_column_decls(ds, columns: list) -> dict:
     return {"added": added, "removed": dropped}
 
 
+def _desktop_sql(sql: str) -> str:
+    """Custom SQL in the form Desktop writes (`<` and `>` doubled)."""
+    from .dryrun import escape_sql
+    return escape_sql(sql)
+
+
 def _sync_object_graph(ds, cname: str, relation_name: str, sql: str) -> int:
     """Point the datasource's logical layer (`<object-graph>`) at the same Custom SQL."""
     og = ds.find("./object-graph")
@@ -1333,7 +1339,7 @@ def _sync_object_graph(ds, cname: str, relation_name: str, sql: str) -> int:
     rel.set("connection", cname)
     rel.set("name", relation_name)
     rel.set("type", "text")
-    rel.text = sql
+    rel.text = _desktop_sql(sql)
     return 1
 
 
@@ -1431,7 +1437,7 @@ def to_live_sql(root, sql: str, columns: list, *, server: str, port: str,
         rel.set("connection", cname)
         rel.set("name", relation_name)
         rel.set("type", "text")
-        rel.text = sql
+        rel.text = _desktop_sql(sql)
 
         recs = etree.SubElement(conn, "metadata-records")
         for i, col in enumerate(columns):

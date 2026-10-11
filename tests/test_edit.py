@@ -330,13 +330,15 @@ def test_live_connection_drops_extract_and_does_not_break_sql():
     ds = [d for d in root.findall("./datasources/datasource") if d.get("name") != "Parameters"][0]
     assert ds.find("extract") is None, "the extract must go, otherwise the workbook is live only in looks"
     rel = ds.find("./connection/relation")
-    assert rel.get("type") == "text" and rel.text == sql
+    from twkit import dryrun
+    assert rel.get("type") == "text" and rel.text == dryrun.escape_sql(sql)   # as Desktop stores it
+    assert dryrun.unescape_sql(rel.text) == sql
     inner = ds.find("./connection/named-connections/named-connection/connection")
     assert inner.get("class") == "mysql" and inner.get("username") == "tableau"
 
     from lxml import etree
     again = safexml.from_bytes(etree.tostring(root))
-    assert again.find(".//relation[@type='text']").text == sql
+    assert dryrun.unescape_sql(again.find(".//relation[@type='text']").text) == sql
 
     recs = ds.findall("./connection/metadata-records/metadata-record")
     assert [r.findtext("remote-name") for r in recs] == ["Date", "GGR"]
@@ -1906,3 +1908,12 @@ def test_caption_copies_follow_the_caption():
     assert [r.text for r in root.iter("run")][:2] == ["Chart color", "Chart color"]
     tips = [r.text for r in root.find(".//customized-tooltip").iter("run")]
     assert tips[0] == "Chart color:\t" and tips[2] == "chart Color x:\t"
+
+
+
+def test_custom_sql_doubling_keeps_parameter_tokens():
+    from twkit import dryrun
+    sql = "SELECT 1 WHERE a <= 2 AND b <> c AND d > <[Parameters].[Min]>"
+    stored = dryrun.escape_sql(sql)
+    assert stored == "SELECT 1 WHERE a <<= 2 AND b <<>> c AND d >> <[Parameters].[Min]>"
+    assert dryrun.unescape_sql(stored) == sql
