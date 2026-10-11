@@ -2937,6 +2937,66 @@ def _render_mlist(rows, ndims: int, captions: list, masks: list, ws=None,
     return _table_html(head, out, kinds if sized else None, ws, fit)
 
 
+def _ref_tail(ref: str) -> str:
+    return (re.findall(r"\[[^\]]+\]", ref or "") or [""])[-1]
+
+
+def computed_order(ws, rows: list, ndims: int, refs: list, mrefs: list) -> list:
+    """Sort by a measure (`<computed-sort>`, one per dimension), as Tableau does: the members of a
+    dimension are ordered inside their parent by the measure aggregated over the member. The
+    aggregate is rebuilt from the view rows (sum, or max/min/avg after the instance prefix); a
+    measure the view does not carry leaves the order as it was."""
+    if ws is None or not rows or not ndims:
+        return rows
+    sorts = {}
+    for cs in ws.findall("table/view/computed-sort"):
+        sorts[_ref_tail(cs.get("column"))] = (_ref_tail(cs.get("using")),
+                                              (cs.get("direction") or "ASC") == "DESC")
+    if not sorts:
+        return rows
+    levels = []
+    for i in range(min(ndims, len(refs or []))):
+        s = next((v for k, v in sorts.items() if refs[i] == k or refs[i].endswith(k)), None)
+        j = ndims + mrefs.index(s[0]) if s and s[0] in (mrefs or []) else None
+        levels.append((i, j if j is not None and j < len(rows[0]) else None, bool(s and s[1]),
+                       (s[0].strip("[]").split(":")[0] if s else "")))
+    if all(j is None for _, j, _, _ in levels):
+        return rows
+    agg, first = {}, {}
+    for n, r in enumerate(rows):
+        for i, j, _, how in levels:
+            k = tuple(str(x) for x in r[:i + 1])
+            first.setdefault(k, n)
+            v = _num(r[j]) if j is not None else None
+            if v is None:
+                continue
+            tot, cnt = agg.get(k, (None, 0))
+            if tot is None:
+                tot = v
+            elif how == "max":
+                tot = max(tot, v)
+            elif how == "min":
+                tot = min(tot, v)
+            else:
+                tot += v
+            agg[k] = (tot, cnt + 1)
+
+    def key(r):
+        out = []
+        for i, j, desc, how in levels:
+            k = tuple(str(x) for x in r[:i + 1])
+            if j is None:
+                out.append((0, 0.0, first[k]))
+            elif k not in agg:
+                out.append((1, 0.0, first[k]))             # no value: after the others
+            else:
+                tot, cnt = agg[k]
+                v = tot / cnt if how == "avg" else tot
+                out.append((0, -v if desc else v, first[k]))
+        return out
+    return sorted(rows, key=key)
+
+
 def manual_order(ws, rows: list, ndims: int) -> list:
     if ws is None or not rows:
         return rows
@@ -3087,6 +3147,7 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                 kind = _sheet_kind(ws, rows, ndims, d.get("mrefs"))
                 rows = hide_filtered(ws, rows, d.get("refs") or [])
                 rows = default_order(ws, rows, ndims)
+                rows = computed_order(ws, rows, ndims, d.get("refs") or [], d.get("mrefs") or [])
                 if ws is not None and any(":Measure Names" in r for r in _shelf_refs(ws, "rows")) \
                         and kind in ("table", "card"):
                     kind = "mlist"

@@ -63,3 +63,26 @@ def test_relative_date_wording():
     assert f(0, 0, "week") == "This week"
     assert f(-1, -1, "year") == "Previous year"
     assert f(-1, -1, "day") == "Yesterday"
+
+
+_SORTED = """<worksheet name='T'><table><view>
+  <computed-sort column='[ds].[none:Region:nk]' direction='DESC' using='[ds].[sum:Regs:qk]'/>
+  <computed-sort column='[ds].[none:Source:nk]' direction='ASC' using='[ds].[sum:Regs:qk]'/>
+</view></table></worksheet>"""
+
+
+def test_sort_by_measure_orders_members_inside_their_parent():
+    rows = [("Asia", "Organic", 5), ("Asia", "SEO", 1), ("CIS", "Organic", 9), ("CIS", "SEO", 4),
+            ("Europe", "Organic", 2)]
+    got = FR.computed_order(etree.fromstring(_SORTED), rows, 2,
+                            ["[none:Region:nk]", "[none:Source:nk]"], ["[sum:Regs:qk]"])
+    # regions by their total, descending: CIS 13, Asia 6, Europe 2; sources ascending inside each
+    assert got == [("CIS", "SEO", 4), ("CIS", "Organic", 9), ("Asia", "SEO", 1),
+                   ("Asia", "Organic", 5), ("Europe", "Organic", 2)]
+
+
+def test_sort_by_a_measure_the_view_lacks_keeps_the_order():
+    rows = [("b", 1), ("a", 2)]
+    ws = etree.fromstring("<worksheet><table><view><computed-sort column='[ds].[none:X:nk]' "
+                          "direction='DESC' using='[ds].[max:Other:qk]'/></view></table></worksheet>")
+    assert FR.computed_order(ws, rows, 1, ["[none:X:nk]"], ["[sum:Y:qk]"]) == rows
