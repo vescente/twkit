@@ -109,6 +109,26 @@ def last_install(book_path: str) -> dict | None:
     return _load_manifest(book_path).get(book_key(book_path))
 
 
+def _within(path: str, folder: str) -> bool:
+    """Is `path` the folder or inside it, by file identity: on a case-insensitive disk
+    `~/documents/x` is `~/Documents/x`, and a string comparison would let it through."""
+    if path == folder or path.startswith(folder.rstrip(os.sep) + os.sep):
+        return True
+    if not os.path.exists(folder):
+        return False
+    cur = path
+    while True:
+        try:
+            if os.path.exists(cur) and os.path.samefile(cur, folder):
+                return True
+        except OSError:
+            pass
+        up = os.path.dirname(cur)
+        if up == cur:
+            return False
+        cur = up
+
+
 def protected(path: str) -> str:
     """Why `path` is the owner's workbook that only `install` may write, or "".
 
@@ -120,7 +140,7 @@ def protected(path: str) -> str:
         return "installed by owner_install"
     guard = config._section("guard")
     norm = lambda x: os.path.realpath(os.path.expanduser(x))
-    inside = lambda r: p == r or p.startswith(r.rstrip(os.sep) + os.sep)
+    inside = lambda r: _within(p, r)
     if any(inside(norm(r)) for r in guard.get("writable") or ()):
         return ""
     hit = next((r for r in guard.get("protected") or () if inside(norm(r))), None)

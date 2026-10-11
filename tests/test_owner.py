@@ -337,6 +337,18 @@ def test_protected_folder_with_writable_exceptions(tmp_path, monkeypatch):
     assert OW.protected(str(tmp_path / "elsewhere.twbx")) == ""
 
 
+def test_protected_folder_in_other_letter_case(tmp_path, monkeypatch):
+    from twkit import config
+    root = tmp_path / "Workbooks"
+    (root / "Demo").mkdir(parents=True)
+    other = str(root / "Demo").replace("Workbooks", "workbooks")
+    if not os.path.exists(other):
+        pytest.skip("case-sensitive file system")
+    monkeypatch.setattr(config, "_section", lambda name: {"protected": [str(root)]}
+                        if name == "guard" else {})
+    assert OW.protected(os.path.join(other, "x.twbx")), "a path in other case is the same folder"
+
+
 def test_save_workbook_refuses_the_owners_book(tmp_path):
     import asyncio
     pytest.importorskip("mcp")
