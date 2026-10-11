@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 
 def catalog_dir() -> str:
@@ -76,8 +77,14 @@ def _cache_path(db: str, table: str) -> str:
     return os.path.join(catalog_dir(), f"{db}.{table}.json")
 
 
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def fetch_schema(db: str, table: str, use_cache: bool = True) -> list[dict]:
     """Table fields for Tableau: [{name, datatype, role, comment}, ...]."""
+    for kind, v in (("database", db), ("table", table)):
+        if not _IDENT.fullmatch(v or ""):          # goes into SQL and into a cache file name
+            raise ValueError(f"{kind} name {v!r} is not a plain identifier")
     fields = None
     if os.environ.get("TWKIT_SCHEMA_OFFLINE") == "1" and use_cache:
         path = _cache_path(db, table)
@@ -88,7 +95,7 @@ def fetch_schema(db: str, table: str, use_cache: bool = True) -> list[dict]:
     try:
         from . import config                # noqa: PLC0415 — local by design
 
-        rows = config.clickhouse().execute(
+        rows = config.clickhouse(read_only=True).execute(
             "SELECT name, type, comment FROM system.columns "
             f"WHERE database='{db}' AND table='{table}' ORDER BY position"
         )

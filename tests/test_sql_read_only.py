@@ -163,3 +163,10 @@ def test_create_view_needs_the_owners_permission(monkeypatch):
     out = str(asyncio.run(register_all().call_tool(
         "create_view", {"view_name": "v", "select_sql": "SELECT 1"})))
     assert "REFUSED" in out and "allow_ddl" in out
+
+
+def test_schema_takes_plain_identifiers_only():
+    from twkit import schema
+    for db, table in (("marts", "x' UNION ALL SELECT 1 --"), ("../../tmp", "x"), ("marts", "")):
+        with pytest.raises(ValueError, match="not a plain identifier"):
+            schema.fetch_schema(db, table)
