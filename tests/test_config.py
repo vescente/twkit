@@ -24,7 +24,6 @@ def test_environment_wins_over_every_other_source(monkeypatch):
 
 def test_missing_settings_report_a_reason_instead_of_crashing(monkeypatch):
     monkeypatch.setattr(C, "CONFIG_PATH", "/nonexistent/twkit.toml")
-    monkeypatch.setattr(C, "_from_private_module", lambda: {})
     C.reset_cache()
     assert C.get("host") == ""
     reason = C.missing_reason("host")
@@ -36,7 +35,6 @@ def test_config_file_is_read_when_environment_is_empty(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
     path.write_text('[database]\nhost = "from-file"\nport = 3306\n', encoding="utf-8")
     monkeypatch.setattr(C, "CONFIG_PATH", str(path))
-    monkeypatch.setattr(C, "_from_private_module", lambda: {})
     C.reset_cache()
     assert C.get("host") == "from-file" and C.get("port") == "3306"
     assert C.source_of("host") == str(path)
@@ -53,3 +51,15 @@ def test_password_never_appears_in_describe(monkeypatch):
 def test_unknown_setting_is_refused_loudly():
     with pytest.raises(KeyError):
         C.get("totally-made-up")
+
+
+def test_untrusted_sql_gets_the_guarded_client(monkeypatch):
+    from twkit import chsafe
+    monkeypatch.setenv("TWKIT_CH_HOST", "example.invalid")
+    C.reset_cache()
+    assert isinstance(C.clickhouse(read_only=True), chsafe.ReadOnlyClient)
+    assert not isinstance(C.clickhouse(), chsafe.ReadOnlyClient)
+
+
+def test_settings_come_only_from_environment_and_config_file():
+    assert not any(n.startswith("_") and "module" in n.lower() for n in dir(C))

@@ -153,3 +153,73 @@ def test_ordinary_reads_still_pass(sql):
 
 def test_a_keyword_before_a_bracket_is_never_a_table_function():
     assert chsafe._table_functions("SELECT * FROM a, b, FROM (SELECT 1)") == []
+
+
+_SELECT = ("SelectWithUnionQuery (children 1)", " ExpressionList (children 1)",
+           "  SelectQuery (children 2)", "   ExpressionList (children 1)", "    Asterisk",
+           "   TablesInSelectQuery (children 1)", "    TablesInSelectQueryElement (children 1)",
+           "     TableExpression (children 1)")
+
+
+def test_server_tree_with_a_table_function_off_the_list_is_refused():
+    lines = _SELECT + ("      Function view (children 1)", "       ExpressionList (children 1)",
+                       "        SelectWithUnionQuery (children 1)", "         ExpressionList (children 1)",
+                       "          SelectQuery (children 2)", "           TablesInSelectQuery (children 1)",
+                       "            TablesInSelectQueryElement (children 1)",
+                       "             TableExpression (children 1)",
+                       "              Function someNewFn (alias s) (children 1)")
+    with pytest.raises(PermissionError, match="someNewFn"):
+        chsafe.ast_read_only(list(lines))
+
+
+def test_server_tree_of_a_plain_read_passes():
+    chsafe.ast_read_only(list(_SELECT + ("      Function numbers (alias n) (children 1)",
+                                         "       ExpressionList (children 1)",
+                                         "        Literal UInt64_3")))
+    chsafe.ast_read_only(["DescribeQuery (children 1)", " TableExpression (children 1)",
+                          "  Subquery (children 1)", "   SelectWithUnionQuery (children 1)"])
+
+
+@pytest.mark.parametrize("lines", [
+    ["InsertQuery (children 1)"],
+    ["SelectWithUnionQuery (children 1)", "SelectWithUnionQuery (children 1)"],
+    ["SelectWithUnionQuery (children 1)", " Function file (children 1)"],
+    [],
+])
+def test_server_tree_that_is_not_one_plain_read_is_refused(lines):
+    with pytest.raises(PermissionError):
+        chsafe.ast_read_only(lines)
+
+
+class _Server:
+    def __init__(self, tree=None, fail=False):
+        self.tree, self.fail, self.ran = tree or [], fail, []
+
+    def explain_ast(self, sql):
+        if self.fail:
+            raise RuntimeError("Syntax error")
+        return self.tree
+
+    def execute(self, sql):
+        self.ran.append(sql)
+        return [[1]]
+
+
+def test_guarded_client_runs_nothing_the_server_tree_refuses():
+    srv = _Server(list(_SELECT + ("      Function someNewFn (children 1)",)))
+    with pytest.raises(PermissionError):
+        chsafe.ReadOnlyClient(srv).execute("SELECT * FROM numbers(1)")
+    assert srv.ran == []
+
+
+def test_guarded_client_refuses_what_the_server_cannot_parse():
+    srv = _Server(fail=True)
+    with pytest.raises(PermissionError, match="could not parse"):
+        chsafe.ReadOnlyClient(srv).execute("SELECT 1")
+    assert srv.ran == []
+
+
+def test_guarded_client_runs_a_plain_read():
+    srv = _Server(list(_SELECT + ("      Function numbers (children 1)",)))
+    assert chsafe.ReadOnlyClient(srv).execute("SELECT * FROM numbers(1)") == [[1]]
+    assert srv.ran == ["SELECT * FROM numbers(1)"]

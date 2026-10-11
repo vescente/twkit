@@ -1,4 +1,4 @@
-"""A minimal ClickHouse HTTP client used when no settings module provides one."""
+"""A minimal ClickHouse HTTP client: the only way twkit reaches ClickHouse."""
 from __future__ import annotations
 
 import re
@@ -96,6 +96,20 @@ class HttpClickhouse:
         if not resp.content or not returns_data:
             return []
         return resp.json().get("data", [])
+
+    def explain_ast(self, query: str) -> list:
+        """ClickHouse's parse tree of `query`, one line per node; nothing runs.
+
+        Sent on its own (one statement per request), never inside another query, and without a
+        FORMAT clause: a trailing one would belong to the explained query.
+        """
+        text = query.strip()
+        while text.endswith(";"):
+            text = text[:-1].rstrip()
+        resp = self._request(f"EXPLAIN AST {text}\n".encode())
+        if resp.status_code >= 400:
+            self._fail(resp)
+        return [_unescape(x) for x in resp.text.split("\n") if x]
 
     def query_stream(self, query: str, batch: int = 50_000):
         """`(names, types, generator of row batches)` — the memory-safe path."""

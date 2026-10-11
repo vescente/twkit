@@ -1886,8 +1886,8 @@ def register_chart_edit_tools(server) -> None:
     def show_config() -> str:
         """Where database settings come from. Secrets are reported as a flag only.
 
-        Settings resolve in order: `TWKIT_DB_*` environment variables, then
-        `~/.twkit/config.toml`, then the settings module (`[settings]`).
+        Settings resolve in order: `TWKIT_CH_*` / `TWKIT_DB_*` environment variables, then
+        `~/.twkit/config.toml` (`[clickhouse]`, `[database]`).
         Nothing configured is a normal state and says so.
         """
         from twkit import config as CFG

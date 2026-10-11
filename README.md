@@ -33,12 +33,15 @@ Register the server in the MCP client (`.mcp.json`):
 ## Configure
 
 Settings live in `~/.twkit/config.toml`; `show_config` reports what resolved (a password only as
-present or absent). Database settings resolve in this order:
+present or absent). Each setting comes from the environment first, then from the file:
 
-1. `TWKIT_DB_HOST`, `TWKIT_DB_PORT`, `TWKIT_DB_USER`, `TWKIT_DB_NAME`, `TWKIT_DB_PASSWORD`
-2. section `[database]`
-3. a settings module named in `[settings]` (`module`, `path`) or by `TWKIT_SETTINGS_MODULE` /
-   `TWKIT_SETTINGS_PATH`
+| what | environment | file |
+|---|---|---|
+| ClickHouse (data checks, extracts) | `TWKIT_CH_HOST`, `_PORT`, `_USER`, `_DB`, `_PASSWORD`, `_CERT` | `[clickhouse]`: `host`, `port`, `user`, `db`, `password`, `cert` |
+| workbook database (Tableau sign-in) | `TWKIT_DB_HOST`, `_PORT`, `_USER`, `_NAME`, `_PASSWORD` | `[database]`: `host`, `port`, `user`, `name`, `password` |
+
+SQL from a workbook or a tool reaches ClickHouse only as one read: it passes a lexical check and
+ClickHouse's own parse (`EXPLAIN AST`, which runs nothing) and runs with `readonly=1`.
 
 Folders protected from every write except `owner_install`:
 

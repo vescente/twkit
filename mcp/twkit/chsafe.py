@@ -157,6 +157,68 @@ _NOT_CALLS = ("FROM", "JOIN", "IN", "AS", "SELECT", "WHERE", "AND", "OR", "ON", 
               "ALL", "ANY", "UNION", "WITH", "USING", "OVER", "BY", "WHEN", "THEN", "ELSE", "CASE",
               "HAVING", "DISTINCT")
 
+_READ_ROOTS = {"SelectWithUnionQuery", "SelectIntersectExceptQuery", "DescribeQuery"}
+
+
+def ast_read_only(lines: list) -> None:
+    """Refuse what ClickHouse's own parse (`EXPLAIN AST` lines) shows is not a plain read.
+
+    One root that reads; no table function off the allowed list; no function that reaches
+    outside the database anywhere. The tree is the server's, so no lexer can read it otherwise.
+    """
+    nodes, stack = [], []
+    for line in lines:
+        text = str(line).rstrip()
+        if not text.strip():
+            continue
+        depth = len(text) - len(text.lstrip(" "))
+        parts = text.split()
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        name = parts[1] if parts[0] == "Function" and len(parts) > 1 else ""
+        nodes.append((depth, parts[0], name, stack[-1][1] if stack else ""))
+        stack.append((depth, parts[0]))
+    roots = [n for n in nodes if n[0] == 0]
+    if len(roots) != 1 or roots[0][1] not in _READ_ROOTS:
+        raise PermissionError("refused: ClickHouse does not read this as one SELECT")
+    for _, kind, name, parent in nodes:
+        if kind != "Function":
+            continue
+        if name.lower() in _OUTSIDE:
+            raise PermissionError(f"refused: {name}() reaches outside the database")
+        if parent == "TableExpression" and name.lower() not in _TABLE_FUNCS_OK:
+            raise PermissionError(f"refused: table function {name}() is not on the allowed list")
+
+
+class ReadOnlyClient:
+    """ClickHouse for untrusted SQL: the lexical guard, then the server's parse, then the query.
+
+    `EXPLAIN AST` only parses; reading its tree leaves no gap between our reading and the
+    server's. Only `execute` and `query_stream` exist: nothing else reaches the server.
+    """
+
+    HEADS = READ_HEADS + ("DESCRIBE", "DESC")
+
+    def __init__(self, client):
+        self._client = client
+
+    def check(self, sql: str) -> str:
+        read_only(sql, self.HEADS)
+        try:
+            lines = self._client.explain_ast(sql)
+        except Exception as exc:                # noqa: BLE001 — refused, not hidden
+            raise PermissionError(
+                f"refused: ClickHouse could not parse the query: {scrub(exc)[:200]}") from None
+        ast_read_only(lines)
+        return sql
+
+    def execute(self, query: str) -> list:
+        return self._client.execute(self.check(query))
+
+    def query_stream(self, query: str, batch: int = 50_000):
+        return self._client.query_stream(self.check(query), batch=batch)
+
+
 _CLAUSE_END = {"WHERE", "PREWHERE", "GROUP", "ORDER", "LIMIT", "HAVING", "UNION", "SETTINGS",
                "FORMAT", "WINDOW", "QUALIFY", "INTERSECT", "EXCEPT", "OFFSET", "SAMPLE"}
 
