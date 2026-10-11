@@ -1210,6 +1210,86 @@ def _control_text(z, ze, root, sheets: dict, pcap: dict, pval: dict, pfmt: dict)
     return title, _filter_state(sheets.get(z.name), z.param, root)
 
 
+def _dashboard_title_html(dash, name: str) -> str:
+    """The dashboard's title zone: its own formatted title, else the dashboard name in bold."""
+    ft = dash.find("layout-options/title/formatted-text")
+    if ft is not None:
+        return _runs_html(ft, lambda token: name if token in ("Sheet Name", "Dashboard Name") else "")
+    return (f"<div style='text-align:left'><span class='lbl' style='font-size:20px;"
+            f"font-weight:600'>{_esc(name)}</span></div>")
+
+
+_SLIDER = ("<span style='display:block;position:relative;height:2px;background:#c8c8c8;"
+           "margin:7px 5px 0'><i style='position:absolute;left:0;top:-4px;width:9px;height:9px;"
+           "border-radius:50%;background:#7a7a7a'></i></span>")
+
+
+def _card_css(kind: str, ws, dash) -> str:
+    """Card background and border: filter cards from the sheet style (`quick-filter`),
+    parameter cards from the dashboard style (`parameter-ctrl`); the zone's own style follows."""
+    element = "quick-filter" if kind == "filter" else "parameter-ctrl"
+    for scope in ([ws] if kind == "filter" and ws is not None else []) + [dash]:
+        for rule in scope.iter("style-rule"):
+            if rule.get("element") != element:
+                continue
+            fm = {f.get("attr"): f.get("value") for f in rule.findall("format") if not f.get("field")}
+            css = []
+            if _hex(fm.get("background-color")):
+                css.append(f"background:{_hex(fm['background-color'])}")
+            if fm.get("border-style") and fm.get("border-style") != "none":
+                try:
+                    bw = max(1, int(float(fm.get("border-width") or 1)))
+                except ValueError:
+                    bw = 1
+                style = fm["border-style"] if fm["border-style"] in ("solid", "dashed", "dotted") else "solid"
+                css.append(f"border:{bw}px {style} {_hex(fm.get('border-color')) or '#999999'}")
+            if css:
+                return ";".join(css) + ";"
+    return ""
+
+
+def _param_members(root, param: str) -> list:
+    """Display values of a list parameter, in order."""
+    pid = param.split("].[")[-1].strip("[]") if param else ""
+    for c in (root.iter("column") if root is not None else ()):
+        if (c.get("name") or "").strip("[]") == pid and c.get("param-domain-type") == "list":
+            out = []
+            for m in c.iter("member"):
+                v = (m.get("value") or "")
+                out.append(m.get("alias") or v.strip('"').replace('\\%', '%'))
+            return out
+    return []
+
+
+def _control_html(z, ze, root, sheets: dict, cur: str, h: float) -> str:
+    """A control as its mode draws it: drop-down (compact), typed value, slider or list."""
+    mode = (ze.get("mode") if ze is not None else "") or ""
+    if mode in ("type_in", "typeinlist"):
+        return f"<span class='box lbl'>{_esc(cur)}</span>"
+    inst = (re.findall(r"\[[^\]]+\]", z.param or "") or [""])[-1]
+    ranged = z.kind == "filter" and bool(inst) and any(
+        (f.get("column") or "").endswith(inst) and f.get("class") == "quantitative"
+        for f in _filters_seen(sheets.get(z.name), root))
+    if mode == "slider" or (ranged and not mode):
+        return f"<span class='box lbl' style='border:none'>{_esc(cur)}</span>{_SLIDER}"
+    if mode == "list" and z.kind == "paramctrl":
+        items = _param_members(root, z.param)
+        rows = max(1, int((h - 18) // 15))
+        return "".join(f"<div class='lbl' style='font-size:11px;line-height:15px'>"
+                       f"{'&#9673;' if v == cur else '&#9675;'} {_esc(v)}</div>" for v in items[:rows])
+    return f"<span class='box lbl'>{_esc(cur)} ▾</span>"
+
+
+def _filters_seen(ws, root) -> list:
+    """Filters a sheet applies: its own and the shared ones of its source."""
+    own = list(ws.iter("filter")) if ws is not None else []
+    sources = {d.get("name") for d in ws.iterfind("table/view/datasources/datasource")} \
+        if ws is not None else set()
+    shared = [f for sv in (root.iter("shared-view") if root is not None else ())
+              if sv.get("name") in sources for f in sv.findall("filter")]
+    return own + shared
+
+
 def _quick_filter_title(ws, param: str):
     """A filter card's own title: Tableau keeps it in the sheet style, not on the zone."""
     if ws is None or not param:
@@ -1555,16 +1635,53 @@ def _css_pt(css: str) -> float:
     return float(m.group(1)) * 0.75 if m else FRAME_TABLE_PT
 
 
+def border_css(ws, elements: tuple) -> str:
+    """Cell borders from the sheet style (the first of `elements` that sets any): none, or a
+    line of the given width and colour under the cell, and between columns for scope=cols."""
+    for el in elements:
+        fm, cols = {}, None
+        for rule in (ws.iter("style-rule") if ws is not None else ()):
+            if rule.get("element") != el:
+                continue
+            for f in rule.findall("format"):
+                a = f.get("attr") or ""
+                if not a.startswith("border-") or f.get("field") or f.get("data-class"):
+                    continue
+                if f.get("scope") == "cols":
+                    if a == "border-color" and _hex(f.get("value")):
+                        cols = _hex(f.get("value"))
+                    continue
+                fm[a] = f.get("value") or ""
+        if not fm and not cols:
+            continue
+        css = []
+        if fm.get("border-style") == "none":
+            css.append("border-bottom:none")
+        elif fm.get("border-style") or fm.get("border-color") or fm.get("border-width"):
+            try:
+                w = max(0, int(float(fm.get("border-width") or 1)))
+            except ValueError:
+                w = 1
+            css.append(f"border-bottom:{w}px solid {_hex(fm.get('border-color')) or GRID}" if w
+                       else "border-bottom:none")
+        if cols:
+            css.append(f"border-right:1px solid {cols}")
+        return ";".join(css) + (";" if css else "")
+    return ""
+
+
 def _table_html(head: list | None, body: list, kinds: list | None = None, ws=None,
                 fit: str = "", zone_w: float = 0.0) -> str:
     hh = head_height(ws, _shelf_refs(ws, "cols")) if ws is not None else None
     clamp = f" style='-webkit-line-clamp:{max(2, int((hh - 4) / 15.3))}'" if hh else ""
-    th = "".join(f"<th class='{h[1]}'{(' style=' + chr(39) + h[2] + chr(39)) if len(h) > 2 and h[2] else ''}>"
+    hb = border_css(ws, ("header",))
+    th = "".join(f"<th class='{h[1]}'"
+                 f"{(' style=' + chr(39) + hb + (h[2] if len(h) > 2 and h[2] else '') + chr(39)) if hb or (len(h) > 2 and h[2]) else ''}>"
                  f"<div class='lbl h2'{clamp}>{_esc(h[0])}</div></th>" for h in (head or []))
     thead = (f"<thead><tr{(' style=' + chr(39) + f'height:{hh:.0f}px' + chr(39)) if hh else ''}>{th}</tr></thead>"
              if head and any(str(h[0]).strip() for h in head) else "")
     rh = row_height(ws)
-    hcss = f"height:{rh:.0f}px;" if rh else ""
+    hcss = (f"height:{rh:.0f}px;" if rh else "") + border_css(ws, ("cell", "pane"))
 
     pband, hband = bands(ws)
 
@@ -3460,8 +3577,8 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
             elif z.kind in ("paramctrl", "filter"):
                 ze = zone_el.get(z.id)
                 label, cur = _control_text(z, ze, root, sheets, pcap, pval, pfmt)
-                parts.append(f"<div class='zone ctl' {attrs} style='{box}'>"
-                             f"{label}<span class='box lbl'>{_esc(cur)} ▾</span></div>")
+                parts.append(f"<div class='zone ctl' {attrs} style='{_card_css(z.kind, sheets.get(z.name), dash)}{box}'>"
+                             f"{label}{_control_html(z, ze, root, sheets, cur, z.h)}</div>")
             elif z.kind == "color" and z.param:
                 parts.append(f"<div class='zone' {attrs} style='{box}'>"
                              f"{_legend_html(z, sheets.get(z.name), data.get(z.name) or {}, root)}</div>")
@@ -3469,6 +3586,9 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                     zone_el[z.id].find("button") is not None:
                 parts.append(f"<div class='zone' {attrs} style='{box}'>"
                              f"{_button_html(zone_el[z.id].find('button'), assets or {}, z.id in opened)}</div>")
+            elif z.kind == "title":
+                parts.append(f"<div class='zone text' {attrs} style='{box}'>"
+                             f"{_dashboard_title_html(dash, name)}</div>")
             elif z.kind == "bitmap" and (assets or {}).get(z.param):
                 fit = "contain" if z.scaled else "none"
                 parts.append(f"<div class='zone' {attrs} style='{box}'>"

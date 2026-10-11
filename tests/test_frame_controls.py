@@ -159,3 +159,47 @@ def test_grand_total_takes_the_sheet_label():
                           "value='Total'/></style-rule></style></table></worksheet>")
     assert FR.total_label(ws) == "Total"
     assert FR.total_label(etree.fromstring("<worksheet/>")) == "Grand Total"
+
+
+def test_dashboard_title_zone_shows_the_dashboard_name():
+    assert ">GEO<" in FR._dashboard_title_html(etree.fromstring("<dashboard name='GEO'/>"), "GEO")
+
+
+class _Z:
+    def __init__(self, kind, param="", name="S", h=80.0):
+        self.kind, self.param, self.name, self.h = kind, param, name, h
+
+
+def test_control_modes():
+    root = etree.fromstring("""<workbook><datasources><datasource name='Parameters'>
+      <column caption='Period' name='[p]' param-domain-type='list' datatype='string'><members>
+        <member value='&quot;daily&quot;'/><member value='&quot;weekly&quot;'/></members></column>
+      </datasource></datasources></workbook>""")
+    z = _Z("paramctrl", "[Parameters].[p]")
+    lst = FR._control_html(z, etree.fromstring("<zone mode='list'/>"), root, {}, "weekly", 80)
+    assert "&#9675; daily" in lst and "&#9673; weekly" in lst
+    assert "▾" not in FR._control_html(z, etree.fromstring("<zone mode='type_in'/>"), root, {}, "5", 40)
+    assert "border-radius:50%" in FR._control_html(z, etree.fromstring("<zone mode='slider'/>"), root, {}, "5", 40)
+    assert "▾" in FR._control_html(z, etree.fromstring("<zone/>"), root, {}, "daily", 40)
+
+
+def test_card_style_from_sheet_and_dashboard():
+    ws = etree.fromstring("<worksheet><table><style><style-rule element='quick-filter'>"
+                          "<format attr='background-color' value='#f0f7fa'/><format attr='border-style' value='solid'/>"
+                          "<format attr='border-width' value='2'/><format attr='border-color' value='#75a1c7'/>"
+                          "</style-rule></style></table></worksheet>")
+    dash = etree.fromstring("<dashboard><style><style-rule element='parameter-ctrl'>"
+                            "<format attr='background-color' value='#eeeeee'/></style-rule></style></dashboard>")
+    assert FR._card_css("filter", ws, dash) == "background:#f0f7fa;border:2px solid #75a1c7;"
+    assert FR._card_css("paramctrl", ws, dash) == "background:#eeeeee;"
+
+
+def test_table_borders_from_sheet_style():
+    ws = etree.fromstring("<worksheet><table><style>"
+                          "<style-rule element='header'><format attr='border-style' value='none'/></style-rule>"
+                          "<style-rule element='cell'><format attr='border-style' value='solid'/>"
+                          "<format attr='border-color' value='#d0d0d0'/>"
+                          "<format attr='border-color' scope='cols' value='#eeeeee'/></style-rule>"
+                          "</style></table></worksheet>")
+    assert FR.border_css(ws, ("header",)) == "border-bottom:none;"
+    assert FR.border_css(ws, ("cell", "pane")) == "border-bottom:1px solid #d0d0d0;border-right:1px solid #eeeeee;"
