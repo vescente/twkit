@@ -320,8 +320,12 @@ def guard_source(book_path: str) -> dict:
 
 def install(built_path: str, book_path: str, *, allowed_losses=(),
             inventory_before: dict = None, inventory_after: dict = None,
-            renames: dict = None, force: bool = False) -> dict:
-    """Install the built file over the owner's: snapshot, diff guard, write, manifest."""
+            renames: dict = None, force: bool = False, source_md5: str = "") -> dict:
+    """Install the built file over the owner's: snapshot, diff guard, write, manifest.
+
+    `source_md5`: md5 of the owner's file the build started from; the install refuses if their
+    file changed since. Without it, an owner's file newer than the build refuses too: the diff
+    guard compares names only, so a formula or a filter they changed meanwhile would be reverted."""
     for kind, p in (("built file", built_path), ("owner's workbook", book_path)):
         lock = opened_in_tableau(p)
         if lock and not force:
@@ -329,6 +333,15 @@ def install(built_path: str, book_path: str, *, allowed_losses=(),
                 f"REFUSED: the {kind} is open in Tableau ({os.path.basename(lock)}). "
                 "Desktop rewrites an open workbook, so the install would not carry what "
                 "was built and checked. Close Tableau and retry.")
+    if os.path.exists(book_path) and not force:
+        if source_md5 and md5(book_path) != source_md5:
+            raise Refused(
+                "REFUSED: the owner's workbook changed since the build started (md5 differs). "
+                "Rebuild from their current file; force=True only if their change is to be dropped.")
+        if not source_md5 and os.path.getmtime(book_path) > os.path.getmtime(built_path):
+            raise Refused(
+                "REFUSED: the owner's workbook was saved after this build was made. Rebuild from "
+                "their current file, or pass source_md5 of the file the build started from.")
 
     report = {}
     if os.path.exists(book_path):

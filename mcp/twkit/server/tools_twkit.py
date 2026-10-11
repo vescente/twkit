@@ -2177,13 +2177,14 @@ def register_owner_tools(server) -> None:
 
     @server.tool()
     def owner_install(built_path: str, book_path: str, allowed_losses: str = "",
-                      renames: str = "", force: bool = False) -> str:
+                      renames: str = "", force: bool = False, source_md5: str = "") -> str:
         """Install a build over the owner's file: snapshot, diff guard, write, manifest.
 
         The diff guard compares the inventory of their current file with our result; anything lost
         that is not in `allowed_losses` (comma-separated) refuses the write. `renames`: renamed items
         as `old=new` pairs; without them a rename looks like a loss. Declare renames instead of using
-        `force`.
+        `force`. `source_md5` (from open_workbook): the install refuses if the owner's file changed
+        since; without it, an owner's file saved after the build refuses.
         """
         from twkit import safexml
         allowed = [a.strip() for a in allowed_losses.split(",") if a.strip()]
@@ -2195,7 +2196,7 @@ def register_owner_tools(server) -> None:
         return _json.dumps(
             OW.install(built_path, book_path, allowed_losses=allowed,
                        inventory_before=before, inventory_after=after,
-                       renames=ren, force=force),
+                       renames=ren, force=force, source_md5=source_md5.strip()),
             ensure_ascii=False, indent=1)
 
 

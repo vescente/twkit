@@ -164,8 +164,8 @@ def test_install_refuses_when_book_open(tmp_path, monkeypatch):
 
     built = tmp_path / "b.twbx"
     book = tmp_path / "Report.twbx"
-    built.write_bytes(b"new")
     book.write_bytes(b"old")
+    built.write_bytes(b"new")                  # the build comes after the owner's save
     lock = tmp_path / ".~Report__8251.twbr"
     lock.write_bytes(b"")
 
@@ -369,3 +369,24 @@ def test_save_workbook_refuses_the_owners_book(tmp_path):
     call("open_workbook", file_path=owner_book)
     assert call("save_workbook", output_path=owner_book).startswith("REFUSED")
     assert OW.md5(owner_book) == was
+
+
+def test_install_refuses_a_build_older_than_the_owners_save(tmp_path):
+    built, book = tmp_path / "b.twbx", tmp_path / "Report.twbx"
+    built.write_bytes(b"new")
+    book.write_bytes(b"theirs")
+    os.utime(built, (1_000_000, 1_000_000))
+    with pytest.raises(OW.Refused, match="saved after this build"):
+        OW.install(str(built), str(book))
+    assert book.read_bytes() == b"theirs"
+
+
+def test_install_refuses_when_the_source_changed(tmp_path):
+    built, book = tmp_path / "b.twbx", tmp_path / "Report.twbx"
+    book.write_bytes(b"theirs v1")
+    md5_v1 = OW.md5(str(book))
+    book.write_bytes(b"theirs v2")
+    built.write_bytes(b"new")
+    with pytest.raises(OW.Refused, match="changed since the build started"):
+        OW.install(str(built), str(book), source_md5=md5_v1)
+    assert book.read_bytes() == b"theirs v2"

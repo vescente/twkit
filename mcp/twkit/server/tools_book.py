@@ -117,8 +117,10 @@ def open_workbook(file_path: str) -> str:
         b = use(Book.open(file_path))
     except Exception as exc:                  # noqa: BLE001
         return _err(exc)
+    from twkit import owner as _OW
     return (f"Opened {file_path}: {len(b.list_worksheets())} worksheets, "
-            f"{len(b.list_dashboards())} dashboards")
+            f"{len(b.list_dashboards())} dashboards; source_md5 {_OW.md5(file_path)} "
+            f"(pass it to owner_install)")
 
 
 @server.tool()
