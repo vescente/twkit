@@ -135,11 +135,20 @@ def read_only(sql: str, heads: tuple = READ_HEADS) -> str:
         raise PermissionError("refused: empty query")
     if ";" in code:
         raise PermissionError("refused: more than one statement")
+    depth = 0
+    for ch in code:
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if depth < 0:
+            break
+    if depth:
+        raise PermissionError("refused: unbalanced brackets")
     head = re.match(r"[\s(]*([A-Za-z]+)", code)
     if not head or head.group(1).upper() not in heads:
         raise PermissionError(f"refused: only {'/'.join(heads)} queries run here")
     if re.search(r"\bINTO\s+OUTFILE\b", code, re.I):
         raise PermissionError("refused: INTO OUTFILE")
+    if re.search(r"\bFORMAT\s+[A-Za-z_]", code, re.I):
+        raise PermissionError("refused: a FORMAT clause; the caller chooses the output format")
     write = _WRITES.search(code)
     if write:
         raise PermissionError(f"refused: {write.group(1).upper()} inside a read query")
@@ -158,6 +167,8 @@ _NOT_CALLS = ("FROM", "JOIN", "IN", "AS", "SELECT", "WHERE", "AND", "OR", "ON", 
               "HAVING", "DISTINCT")
 
 _READ_ROOTS = {"SelectWithUnionQuery", "SelectIntersectExceptQuery", "DescribeQuery"}
+# One node per line: indent, node type, an optional word, then `(children N)` if it has any.
+_AST_LINE = re.compile(r"( *)([A-Z][A-Za-z]*)(?= |$)(.*?)(?: \(children (\d+)\))?$")
 
 
 def ast_read_only(lines: list) -> None:
@@ -166,18 +177,26 @@ def ast_read_only(lines: list) -> None:
     One root that reads; no table function off the allowed list; no function that reaches
     outside the database anywhere. The tree is the server's, so no lexer can read it otherwise.
     """
-    nodes, stack = [], []
+    nodes, stack, declared = [], [], []
     for line in lines:
-        text = str(line).rstrip()
-        if not text.strip():
-            continue
-        depth = len(text) - len(text.lstrip(" "))
-        parts = text.split()
-        while stack and stack[-1][0] >= depth:
+        text = str(line).rstrip("\r")
+        m = _AST_LINE.match(text)
+        if not m:
+            raise PermissionError("refused: the server's parse tree is not in the expected form")
+        depth = len(m.group(1))
+        if depth > (nodes[-1][0] + 1 if nodes else 0):
+            raise PermissionError("refused: the server's parse tree is not in the expected form")
+        while stack and nodes[stack[-1]][0] >= depth:
             stack.pop()
-        name = parts[1] if parts[0] == "Function" and len(parts) > 1 else ""
-        nodes.append((depth, parts[0], name, stack[-1][1] if stack else ""))
-        stack.append((depth, parts[0]))
+        if stack:
+            declared[stack[-1]][1] += 1
+        kind, rest = m.group(2), m.group(3).split()
+        name = rest[0] if kind == "Function" and rest and not rest[0].startswith("(") else ""
+        nodes.append((depth, kind, name, nodes[stack[-1]][1] if stack else ""))
+        declared.append([int(m.group(4) or 0), 0])
+        stack.append(len(nodes) - 1)
+    if any(want != got for want, got in declared):
+        raise PermissionError("refused: the server's parse tree is not in the expected form")
     roots = [n for n in nodes if n[0] == 0]
     if len(roots) != 1 or roots[0][1] not in _READ_ROOTS:
         raise PermissionError("refused: ClickHouse does not read this as one SELECT")
@@ -193,8 +212,9 @@ def ast_read_only(lines: list) -> None:
 class ReadOnlyClient:
     """ClickHouse for untrusted SQL: the lexical guard, then the server's parse, then the query.
 
-    `EXPLAIN AST` only parses; reading its tree leaves no gap between our reading and the
-    server's. Only `execute` and `query_stream` exist: nothing else reaches the server.
+    A read runs as a subquery, `SELECT * FROM (<sql>)`, the way Tableau runs Custom SQL; a
+    DESCRIBE runs as it is. `EXPLAIN AST` parses exactly that statement, and exactly that
+    statement runs: what was checked is what executes. Only `execute` and `query_stream` exist.
     """
 
     HEADS = READ_HEADS + ("DESCRIBE", "DESC")
@@ -203,14 +223,20 @@ class ReadOnlyClient:
         self._client = client
 
     def check(self, sql: str) -> str:
+        """The statement that will run, or PermissionError."""
         read_only(sql, self.HEADS)
+        body = sql.strip()
+        while body.endswith(";"):
+            body = body[:-1].rstrip()
+        head = re.match(r"[\s(]*([A-Za-z]+)", _code_only(body)).group(1).upper()
+        stmt = body if head in ("DESCRIBE", "DESC") else f"SELECT * FROM (\n{body}\n)"
         try:
-            lines = self._client.explain_ast(sql)
+            lines = self._client.explain_ast(stmt)
         except Exception as exc:                # noqa: BLE001 — refused, not hidden
             raise PermissionError(
                 f"refused: ClickHouse could not parse the query: {scrub(exc)[:200]}") from None
         ast_read_only(lines)
-        return sql
+        return stmt
 
     def execute(self, query: str) -> list:
         return self._client.execute(self.check(query))

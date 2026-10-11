@@ -40,8 +40,9 @@ present or absent). Each setting comes from the environment first, then from the
 | ClickHouse (data checks, extracts) | `TWKIT_CH_HOST`, `_PORT`, `_USER`, `_DB`, `_PASSWORD`, `_CERT` | `[clickhouse]`: `host`, `port`, `user`, `db`, `password`, `cert` |
 | workbook database (Tableau sign-in) | `TWKIT_DB_HOST`, `_PORT`, `_USER`, `_NAME`, `_PASSWORD` | `[database]`: `host`, `port`, `user`, `name`, `password` |
 
-SQL from a workbook or a tool reaches ClickHouse only as one read: it passes a lexical check and
-ClickHouse's own parse (`EXPLAIN AST`, which runs nothing) and runs with `readonly=1`.
+SQL from a workbook or a tool reaches ClickHouse only as one read: it passes a lexical check, then
+ClickHouse's own parse (`EXPLAIN AST`, which runs nothing) of the exact statement that runs, a
+subquery as Tableau runs Custom SQL, with `readonly=1`.
 
 Folders protected from every write except `owner_install`:
 

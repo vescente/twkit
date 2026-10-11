@@ -44,11 +44,12 @@ class HttpClickhouse:
         text = re.sub(r"https?://[^\s/'\"]+", "<address hidden>", text)
         return re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<address hidden>", text)
 
-    def _request(self, body: bytes, stream: bool = False):
+    def _request(self, body: bytes, stream: bool = False, params: dict | None = None):
         """One network round trip."""
         import requests                       # noqa: PLC0415 — optional dependency
+        import urllib.parse                   # noqa: PLC0415 — local by design
 
-        qs = self._qs
+        qs = "&".join(x for x in (self._qs, urllib.parse.urlencode(params or {})) if x)
         if self._read_only and not self._account_read_only():
             qs = "&".join(x for x in (qs, "readonly=1") if x)
         try:
@@ -89,7 +90,7 @@ class HttpClickhouse:
         text = (query % params if params else query).strip()
         head = text.split(None, 1)[0].upper() if text else ""
         returns_data = head in DATA_HEADS
-        body = (text + " FORMAT JSONCompact") if returns_data else text
+        body = (text + "\nFORMAT JSONCompact") if returns_data else text
         resp = self._request(body.encode())
         if resp.status_code >= 400:
             self._fail(resp)
@@ -100,13 +101,15 @@ class HttpClickhouse:
     def explain_ast(self, query: str) -> list:
         """ClickHouse's parse tree of `query`, one line per node; nothing runs.
 
-        Sent on its own (one statement per request), never inside another query, and without a
-        FORMAT clause: a trailing one would belong to the explained query.
+        Sent on its own (one statement per request), never inside another query. The output
+        format is pinned twice, by a FORMAT clause of our own and by `default_format`; a query
+        that brings its own FORMAT fails to parse and is refused.
         """
         text = query.strip()
         while text.endswith(";"):
             text = text[:-1].rstrip()
-        resp = self._request(f"EXPLAIN AST {text}\n".encode())
+        resp = self._request(f"EXPLAIN AST {text}\nFORMAT TabSeparated".encode(),
+                             params={"default_format": "TabSeparated"})
         if resp.status_code >= 400:
             self._fail(resp)
         return [_unescape(x) for x in resp.text.split("\n") if x]
@@ -114,7 +117,7 @@ class HttpClickhouse:
     def query_stream(self, query: str, batch: int = 50_000):
         """`(names, types, generator of row batches)` — the memory-safe path."""
         text = query.strip().rstrip(";")
-        resp = self._request((text + " FORMAT TSVWithNamesAndTypes").encode(),
+        resp = self._request((text + "\nFORMAT TSVWithNamesAndTypes").encode(),
                              stream=True)
         if resp.status_code >= 400:
             self._fail(resp)

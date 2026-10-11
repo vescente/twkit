@@ -155,36 +155,53 @@ def test_a_keyword_before_a_bracket_is_never_a_table_function():
     assert chsafe._table_functions("SELECT * FROM a, b, FROM (SELECT 1)") == []
 
 
-_SELECT = ("SelectWithUnionQuery (children 1)", " ExpressionList (children 1)",
-           "  SelectQuery (children 2)", "   ExpressionList (children 1)", "    Asterisk",
-           "   TablesInSelectQuery (children 1)", "    TablesInSelectQueryElement (children 1)",
-           "     TableExpression (children 1)")
+def _read(table_fn: str) -> list:
+    """The server's tree of `SELECT * FROM <table_fn>(3)`, complete."""
+    return ["SelectWithUnionQuery (children 2)", " ExpressionList (children 1)",
+            "  SelectQuery (children 2)", "   ExpressionList (children 1)", "    Asterisk",
+            "   TablesInSelectQuery (children 1)", "    TablesInSelectQueryElement (children 1)",
+            "     TableExpression (children 1)", f"      Function {table_fn} (alias n) (children 1)",
+            "       ExpressionList (children 1)", "        Literal UInt64_3",
+            " Identifier TabSeparated"]
+
+
+_VIEW = ["SelectWithUnionQuery (children 1)", " ExpressionList (children 1)",
+         "  SelectQuery (children 2)", "   ExpressionList (children 1)", "    Asterisk",
+         "   TablesInSelectQuery (children 1)", "    TablesInSelectQueryElement (children 1)",
+         "     TableExpression (children 1)", "      Function view (children 1)",
+         "       ExpressionList (children 1)", "        SelectWithUnionQuery (children 1)",
+         "         ExpressionList (children 1)", "          SelectQuery (children 2)",
+         "           ExpressionList (children 1)", "            Asterisk",
+         "           TablesInSelectQuery (children 1)",
+         "            TablesInSelectQueryElement (children 1)",
+         "             TableExpression (children 1)",
+         "              Function someNewFn (alias s) (children 1)",
+         "               ExpressionList (children 1)", "                Literal UInt64_1"]
+
+_DESCRIBE = ["DescribeQuery (children 2)", " TableExpression (children 1)", "  Subquery (children 1)",
+             "   SelectWithUnionQuery (children 1)", "    ExpressionList (children 1)",
+             "     SelectQuery (children 1)", "      ExpressionList (children 1)",
+             "       Literal UInt64_1 (alias a)", " Identifier TabSeparated"]
 
 
 def test_server_tree_with_a_table_function_off_the_list_is_refused():
-    lines = _SELECT + ("      Function view (children 1)", "       ExpressionList (children 1)",
-                       "        SelectWithUnionQuery (children 1)", "         ExpressionList (children 1)",
-                       "          SelectQuery (children 2)", "           TablesInSelectQuery (children 1)",
-                       "            TablesInSelectQueryElement (children 1)",
-                       "             TableExpression (children 1)",
-                       "              Function someNewFn (alias s) (children 1)")
     with pytest.raises(PermissionError, match="someNewFn"):
-        chsafe.ast_read_only(list(lines))
+        chsafe.ast_read_only(_VIEW)
 
 
 def test_server_tree_of_a_plain_read_passes():
-    chsafe.ast_read_only(list(_SELECT + ("      Function numbers (alias n) (children 1)",
-                                         "       ExpressionList (children 1)",
-                                         "        Literal UInt64_3")))
-    chsafe.ast_read_only(["DescribeQuery (children 1)", " TableExpression (children 1)",
-                          "  Subquery (children 1)", "   SelectWithUnionQuery (children 1)"])
+    chsafe.ast_read_only(_read("numbers"))
+    chsafe.ast_read_only(_DESCRIBE)
 
 
 @pytest.mark.parametrize("lines", [
-    ["InsertQuery (children 1)"],
-    ["SelectWithUnionQuery (children 1)", "SelectWithUnionQuery (children 1)"],
-    ["SelectWithUnionQuery (children 1)", " Function file (children 1)"],
+    ["InsertQuery"],
+    ["SelectWithUnionQuery", "SelectWithUnionQuery"],
+    ["SelectWithUnionQuery (children 1)", " Function file"],
     [],
+    _read("numbers")[:-1],
+    _read("numbers")[:5] + ["      Asterisk"],
+    ['{"data": [["SelectWithUnionQuery"]]}'],
 ])
 def test_server_tree_that_is_not_one_plain_read_is_refused(lines):
     with pytest.raises(PermissionError):
@@ -206,7 +223,7 @@ class _Server:
 
 
 def test_guarded_client_runs_nothing_the_server_tree_refuses():
-    srv = _Server(list(_SELECT + ("      Function someNewFn (children 1)",)))
+    srv = _Server(_read("someNewFn"))
     with pytest.raises(PermissionError):
         chsafe.ReadOnlyClient(srv).execute("SELECT * FROM numbers(1)")
     assert srv.ran == []
@@ -220,6 +237,30 @@ def test_guarded_client_refuses_what_the_server_cannot_parse():
 
 
 def test_guarded_client_runs_a_plain_read():
-    srv = _Server(list(_SELECT + ("      Function numbers (children 1)",)))
+    srv = _Server(_read("numbers"))
     assert chsafe.ReadOnlyClient(srv).execute("SELECT * FROM numbers(1)") == [[1]]
-    assert srv.ran == ["SELECT * FROM numbers(1)"]
+    assert srv.ran == ["SELECT * FROM (\nSELECT * FROM numbers(1)\n)"]
+
+
+def test_guarded_client_checks_exactly_the_statement_it_runs():
+    class Seen(_Server):
+        def explain_ast(self, sql):
+            self.explained = sql
+            return _read("numbers")
+    srv = Seen()
+    chsafe.ReadOnlyClient(srv).execute("SELECT 1 -- tail")
+    assert srv.ran == [srv.explained]
+    chsafe.ReadOnlyClient(srv).execute("DESCRIBE (SELECT 1)")
+    assert srv.ran[-1] == srv.explained == "DESCRIBE (SELECT 1)"
+
+
+def test_a_query_never_chooses_the_output_format():
+    with pytest.raises(PermissionError, match="FORMAT"):
+        chsafe.read_only("SELECT 1 FORMAT JSONEachRow")
+    assert chsafe.read_only("SELECT format('{}', 1)")
+
+
+@pytest.mark.parametrize("sql", ["SELECT 1) UNION ALL (SELECT 2", "SELECT (1", "SELECT ')' AS a)"])
+def test_unbalanced_brackets_are_refused(sql):
+    with pytest.raises(PermissionError, match="unbalanced"):
+        chsafe.read_only(sql)
