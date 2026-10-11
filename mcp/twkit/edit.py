@@ -214,7 +214,27 @@ def drop_fields(root, fields: list, keep_on_shelves: str = "") -> dict:
             par.remove(el)
             killed += 1
     killed += _drop_text_refs(root, fields)
+    for pane in list(root.iter("pane")):      # the pane of a dropped dual-axis measure
+        axis = pane.get("y-axis-name") or pane.get("x-axis-name") or ""
+        if axis and any(mentions(axis, f) for f in fields):
+            pane.getparent().remove(pane)
+            killed += 1
     return {"refs_removed": killed, "shelves_with_axis_replaced": replaced}
+
+
+def _drop_from_sum(text: str, fields: list) -> str:
+    """A dual-axis shelf (`([a] + [b])`) without the dropped operands."""
+    for t in [t for t in shelf_tokens(text) if any(mentions(t, f) for f in fields)]:
+        esc = re.escape(t)
+        out = re.sub(r"\s*\+\s*" + esc, "", text, count=1)
+        if out == text:
+            out = re.sub(esc + r"\s*\+\s*", "", text, count=1)
+        text = out if out != text else text.replace(t, "")
+    prev = None
+    while prev != text:                       # "([ds].[b])" -> "[ds].[b]"
+        prev = text
+        text = re.sub(r"\((\[[^\[\]]+\]\.\[[^\[\]]+\])\)", r"\1", text)
+    return text.strip()
 
 
 def _drop_text_refs(root, fields: list) -> int:
@@ -223,7 +243,11 @@ def _drop_text_refs(root, fields: list) -> int:
     for tag in ("rows", "cols"):
         for shelf in list(root.iter(tag)):
             text = (shelf.text or "").strip()
-            if not text or "+" in text or not any(mentions(text, f) for f in fields):
+            if not text or not any(mentions(text, f) for f in fields):
+                continue
+            if "+" in text:                   # a dual axis: drop the operand, keep the other
+                shelf.text = _drop_from_sum(text, fields)
+                removed += 1
                 continue
             toks = [t for t in shelf_tokens(text)
                     if not any(mentions(t, f) for f in fields)]

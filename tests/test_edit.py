@@ -1841,3 +1841,14 @@ def test_retune_does_not_touch_a_longer_name():
         <groupfilter function='member' level='[none:Region Name:nk]' member='&quot;x&quot;'/></filter>
     </view></table></worksheet></worksheets></workbook>""")
     assert ED.retune_categorical_filter(root, "Region", ["East"]) == 0
+
+
+def test_drop_fields_takes_one_operand_off_a_dual_axis():
+    root = _tree("""<workbook><datasources><datasource name='ds'>
+      <column name='[a]' datatype='real'/><column name='[b]' datatype='real'/></datasource></datasources>
+      <worksheets><worksheet name='S'><table><view/><panes>
+        <pane id='1' y-axis-name='[ds].[sum:a:qk]'/><pane id='2' y-axis-name='[ds].[sum:b:qk]'/></panes>
+        <rows>([ds].[sum:a:qk] + [ds].[sum:b:qk])</rows><cols/></table></worksheet></worksheets></workbook>""")
+    ED.drop_fields(root, ["a"])
+    assert root.findtext(".//rows") == "[ds].[sum:b:qk]"
+    assert [p.get("id") for p in root.iter("pane")] == ["2"]
