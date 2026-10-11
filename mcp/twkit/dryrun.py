@@ -2250,6 +2250,14 @@ def _top_n_where(fl, tr, target, ctx_wheres: list) -> str:
     return f"({dim_sql} IN ({sub}))"
 
 
+def shared_filters_for(ws, shared_filters) -> list:
+    """The shared-view filters that apply to a sheet: a shared view holds the filters of ONE
+    source, and a sheet on another source does not get them."""
+    sources = {d.get("name") for d in ws.iterfind("table/view/datasources/datasource")}
+    return [f for f in (shared_filters or [])
+            if f.getparent() is None or f.getparent().get("name") in sources]
+
+
 def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
                sample_rows: int = 3, relax: bool = False, dynamic: bool = False) -> SheetResult:
     """`relax=True` runs the sheet without the untranslatable part instead of refusing."""
@@ -2421,7 +2429,7 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     top_wheres: list[str] = []
     tc_filters: list = []
     havings: list[str] = []
-    filter_sources = list(ws.iter("filter")) + list(shared_filters or [])
+    filter_sources = list(ws.iter("filter")) + shared_filters_for(ws, shared_filters)
 
     def _dim_filter(fl) -> None:
         col = fl.get("column") or ""

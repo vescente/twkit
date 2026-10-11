@@ -281,3 +281,15 @@ def test_top_filter_cuts_category_count():
     assert top_n_cap(root, 'A') == 10
     assert top_n_cap(root, 'B') == 15
     assert top_n_cap(root, 'C') is None
+
+
+def test_shared_filters_reach_only_sheets_of_their_source():
+    from lxml import etree
+    root = etree.fromstring("""<workbook><shared-views>
+      <shared-view name='A'><filter column='[A].[none:x:nk]'/></shared-view>
+      <shared-view name='B'><filter column='[B].[none:y:nk]'/></shared-view></shared-views>
+      <worksheets><worksheet name='onA'><table><view><datasources>
+        <datasource name='A'/></datasources></view></table></worksheet></worksheets></workbook>""")
+    shared = list(root.find("shared-views").iter("filter"))
+    got = dryrun.shared_filters_for(root.find(".//worksheet"), shared)
+    assert [f.get("column") for f in got] == ["[A].[none:x:nk]"]
