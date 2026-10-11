@@ -15,7 +15,7 @@ from `preflight`. Add a row when you add a module.
 | `canon.py` | channel: metrics | metric definitions as executable checks on formulas and SQL |
 | `cdp.py` | view | one persistent headless Chrome for the frame, over CDP (own port and profile) |
 | `chclient.py` | data | minimal ClickHouse HTTP client when no settings module provides one |
-| `chsafe.py` | security | keep secrets out of ClickHouse tracebacks; SQL from a workbook or a tool runs only as one read statement (`read_only`), with `readonly=1` on the built-in client |
+| `chsafe.py` | security | keep secrets out of ClickHouse tracebacks; SQL from a workbook or a tool runs only as one read statement (`read_only`), with `readonly=1` on the built-in client; text that ClickHouse and Hyper would read differently (nested comments, a lone `\r`, backslash quotes, `$`, `#`) is refused |
 | `contentfit.py` | build | sizes from content: table column widths, header bands, title room; layout rows that keep tables at content height |
 | `conn.py` | build | data source connections: CSV, Hyper (several tables related on a shared column), MySQL table or Custom SQL |
 | `config.py` | settings | where connection parameters and data paths come from (`~/.twkit/config.toml`) |
@@ -25,7 +25,7 @@ from `preflight`. Add a row when you add a module.
 | `dryrun.py` | channel: data | sheets translated to SQL and executed before handover |
 | `edit.py` | edit | operations on an existing workbook: fields, sheets, pages, zones, filters, format |
 | `extract.py` | channel: source | database table to `.hyper` extract; extract references |
-| `frame.py` | view | the workbook rendered as HTML and measured in Chrome (`frame_publish`) |
+| `frame.py` | view | the workbook rendered as HTML and measured in Chrome (`frame_publish`); workbook colours and fonts reach CSS only after a strict check, and each page runs only its own script (CSP) |
 | `fields.py` | build | field expressions (`SUM(sales)`, `MONTH(date)`) and their sheet instances; what aggregates |
 | `framecmp.py` | calibration | frame images against Tableau Public renders, per zone (OCR and ink) |
 | `geodata.py` | view | US state centroids for the frame map model |
@@ -46,7 +46,7 @@ from `preflight`. Add a row when you add a module.
 | `server/tools_book.py` | server | build tools over `Book`; `save_workbook` refuses blockers |
 | `server/tools_twkit.py` | server | toolkit tools: style, data, checks, edits, views, the owner's workbook |
 | `sheet.py` | build | a worksheet's chart: marks, shelves, encodings, filters, sorts, axes, labels, maps, style |
-| `shot.py` | channel: eyes | capture of the Tableau Desktop window |
+| `shot.py` | channel: eyes | capture of the Tableau Desktop window; window titles reach AppleScript only as escaped literals |
 | `sketch.py` | channel: sketch | every sheet drawn from real data, stamped "SKETCH" |
 | `spec.py` | build | a dashboard described as a YAML spec |
 | `story.py` | build | story points from sheets |

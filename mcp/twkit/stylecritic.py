@@ -250,8 +250,7 @@ def deep_probe(page_file: str, opts: dict | None = None) -> dict:
     m = frame.canvas_size(open(page_file, encoding="utf-8").read())
     w, h = (int(m.group(1)) + 40, int(m.group(2)) + 40) if m else (1600, 1200)
     with cdp.Tab() as t:
-        t.open(url, w, h, "document.fonts.status === 'loaded' && "
-                          "!!document.getElementById('probe-out')")
+        t.open(url, w, h, frame.PROBE_READY)
         return t.eval(f"({CRITIC_JS})({json.dumps(opts or {}, ensure_ascii=False)})") or {}
 
 

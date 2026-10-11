@@ -60,7 +60,8 @@ def _code_only(sql: str) -> str:
 
     Read the same way by ClickHouse and Hyper (PostgreSQL), or refused: a backslash before
     a closing quote ends the string in one dialect and escapes it in the other; `$` opens a
-    dollar-quoted string; `#` is a comment in one and an operator in the other.
+    dollar-quoted string; `#` is a comment in one and an operator in the other. Comments
+    are refused where a parser could end them elsewhere: nested `/*` and a lone `\\r`.
     """
     out, i, n = [], 0, len(sql)
     while i < n:
@@ -90,12 +91,18 @@ def _code_only(sql: str) -> str:
                 out.append(" _q ")
             i = j + 1
         elif sql.startswith("--", i):
-            m = re.compile(r"[\r\n]").search(sql, i)
-            i = m.start() if m else n
+            j = sql.find("\n", i)
+            j = n if j < 0 else j
+            if re.search(r"\r(?!\n|$)", sql[i:j + 1]):
+                raise PermissionError("refused: a carriage return ends a comment in one dialect only")
+            out.append(" ")
+            i = j
         elif sql.startswith("/*", i):
             j = sql.find("*/", i + 2)
             if j < 0:
                 raise PermissionError("refused: unterminated comment in the query")
+            if "/*" in sql[i + 2:j]:
+                raise PermissionError("refused: nested comments end in different places")
             out.append(" ")
             i = j + 2
         elif c in "$#":

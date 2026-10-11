@@ -1,6 +1,8 @@
 """Frame: a Tableau workbook rendered as a local HTML page for viewing in Chrome."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
 import json
 import os
@@ -100,8 +102,8 @@ def mark_color(ws) -> str:
     for sr in (ws.iter("style-rule") if ws is not None else ()):
         if sr.get("element") == "mark":
             for f in sr.findall("format"):
-                if f.get("attr") == "mark-color" and (f.get("value") or "").startswith("#"):
-                    return f.get("value")[:7]
+                if f.get("attr") == "mark-color" and _hex(f.get("value")):
+                    return _hex(f.get("value"))
     return BAR
 
 
@@ -354,15 +356,14 @@ def fmt_dim(v, ref: str = "", mask: str = "") -> str:
     return sv
 
 
-def _style(z) -> str:
-    st = z.style or {}
-    css = []
-    if st.get("background-color") and st["background-color"] not in ("#00000000",):
-        css.append(f"background:{st['background-color']}")
-    if st.get("border-style") and st["border-style"] != "none":
-        css.append(f"border:{st.get('border-width', '1')}px {st['border-style']} "
-                   f"{st.get('border-color', '#000')}")
-    return ";".join(css)
+def _hex(c: str | None) -> str | None:
+    """`#rrggbb` from a workbook colour, or None: workbook text never reaches the page raw."""
+    c = (c or "").strip()[:7]
+    return c if re.fullmatch(r"#[0-9a-fA-F]{6}", c) else None
+
+
+def _font(name: str | None) -> str:
+    return re.sub(r"[^\w .,-]", "", name or "")
 
 
 def _opaque(c: str | None) -> str | None:
@@ -486,8 +487,8 @@ def pane_style(ws, ref: str = "") -> dict:
         if ref and (inst_refs(ax) or [""])[0] != ref:
             continue
         for f in p.iter("format"):
-            if f.get("attr") == "mark-color" and (f.get("value") or "").startswith("#"):
-                out["color"] = out["color"] or f.get("value")[:7]
+            if f.get("attr") == "mark-color" and _hex(f.get("value")):
+                out["color"] = out["color"] or _hex(f.get("value"))
             if f.get("attr") == "mark-labels-show" and out["labels"] is None:
                 out["labels"] = f.get("value") == "true"
         if ref:
@@ -881,7 +882,7 @@ def _palette_color(root, ws, inst: str, value) -> str | None:
         for e in sc.iter("encoding"):
             if e.get("attr") != "color" or not (e.get("field") or "").endswith(inst):
                 continue
-            cols = [c.text for c in e.iter("color") if c.text]
+            cols = [_hex(c.text) for c in e.iter("color") if _hex(c.text)]
             if not cols:
                 continue
             center = _num(e.get("center")) if e.get("center") is not None else 0.0
@@ -937,7 +938,7 @@ def _render_bigtext(ws, rows, ndims: int, masks: list, mrefs: list) -> str:
         mk = masks[ndims + k] if ndims + k < len(masks) else ""
         style = f"font-size:{pt * 4 / 3:.0f}px;line-height:1.1"
         if fam:
-            style += f";font-family:'{_esc(fam)}'"
+            style += f";font-family:'{_font(fam)}'"
         out.append(f"<div class='ln lbl' style='{style}'>"
                    f"{_esc(_fmt(first[ndims + k], '', mk))}</div>")
     return (f"<div style='display:flex;flex-direction:column;justify-content:center;"
@@ -1098,8 +1099,8 @@ def _runs_html(ze, subst=None) -> str:
         st = [f"font-size:{float(r.get('fontsize') or 9) * 4 / 3:.0f}px"]
         if r.get("bold") == "true":
             st.append("font-weight:700")
-        if (r.get("fontcolor") or "").startswith("#"):
-            st.append(f"color:{r.get('fontcolor')[:7]}")
+        if _hex(r.get("fontcolor")):
+            st.append(f"color:{_hex(r.get('fontcolor'))}")
         parts = txt.split("\n")
         out.append("<br>".join(f"<span class='lbl' style='{';'.join(st)}'>{_esc(p)}</span>" for p in parts))
     return f"<div style='text-align:{align}'>{''.join(out)}</div>"
@@ -1145,15 +1146,15 @@ def _button_html(btn, assets: dict) -> str:
     fs = st.find("button-caption-font-style")
     css = ["display:flex;align-items:center;justify-content:center;height:100%;font-size:11px"]
     if fs is not None:
-        if (fs.get("fontcolor") or "").startswith("#"):
-            css.append(f"color:{fs.get('fontcolor')[:7]}")
+        if _hex(fs.get("fontcolor")):
+            css.append(f"color:{_hex(fs.get('fontcolor'))}")
         if fs.get("fontname"):
-            css.append(f"font-family:'{_esc(fs.get('fontname'))}'")
+            css.append(f"font-family:'{_font(fs.get('fontname'))}'")
         if fs.get("fontsize"):
             css.append(f"font-size:{float(fs.get('fontsize')) * 4 / 3:.0f}px")
     for f in btn.iter("format"):
-        if f.get("attr") == "background-color" and (f.get("value") or "").startswith("#"):
-            css.append(f"background:{f.get('value')[:7]}")
+        if f.get("attr") == "background-color" and _hex(f.get("value")):
+            css.append(f"background:{_hex(f.get('value'))}")
     return f"<div class='lbl' style='{';'.join(css)}'>{_esc(cap)}</div>"
 
 
@@ -1245,11 +1246,11 @@ def _mark_text_color(ws) -> str:
     if ws is None:
         return INK
     for run in ws.iter("run"):
-        if (run.get("fontcolor") or "").startswith("#"):
-            return run.get("fontcolor")[:7]
+        if _hex(run.get("fontcolor")):
+            return _hex(run.get("fontcolor"))
     for f in ws.iter("format"):
-        if f.get("attr") == "color" and (f.get("value") or "").startswith("#"):
-            return f.get("value")[:7]
+        if f.get("attr") == "color" and _hex(f.get("value")):
+            return _hex(f.get("value"))
     return INK
 
 
@@ -1394,12 +1395,11 @@ def text_css(ws, element: str, ref: str = "", rules: dict | None = None) -> str:
         css.append(f"font-weight:{700 if got['font-weight'] == 'bold' else 400}")
     if got.get("font-style") == "italic":
         css.append("font-style:italic")
-    fam = re.sub(r"[\"'<>;]", "", got.get("font-family") or "")
+    fam = _font(got.get("font-family"))
     if fam:
         css.append(f'font-family:"{fam}","Tableau Book",Arial,sans-serif')
-    if (got.get("color") or "").startswith("#") and len(got["color"]) >= 7 and \
-            not got["color"][7:9] == "00":
-        css.append(f"color:{got['color'][:7]}")
+    if _hex(got.get("color")) and not got["color"][7:9] == "00":
+        css.append(f"color:{_hex(got['color'])}")
     if got.get("text-align") in ("left", "center", "right"):
         css.append(f"text-align:{got['text-align']}")
     return ";".join(css)
@@ -1684,12 +1684,12 @@ def measure_palette(root, ws, inst: str) -> dict:
     if enc is None:
         return spec
     name = enc.get("palette") or ""
-    cols = [c.text.strip() for c in enc.iter("color") if (c.text or "").strip()]
+    cols = [_hex(c.text) for c in enc.iter("color") if _hex(c.text)]
     ptype = (enc.find("color-palette").get("type") if enc.find("color-palette") is not None else "") or ""
     if not cols and name and root is not None:
         for cp in root.findall("preferences/color-palette"):
             if cp.get("name") == name:
-                cols = [c.text.strip() for c in cp.findall("color") if (c.text or "").strip()]
+                cols = [_hex(c.text) for c in cp.findall("color") if _hex(c.text)]
                 ptype = cp.get("type") or ptype
     if not cols and name in TABLEAU_PALETTES:
         cols = list(TABLEAU_PALETTES[name])
@@ -1947,12 +1947,12 @@ def color_map(root, ws) -> dict:
     for ds in root.findall("datasources/datasource"):
         if ds.get("name") != ds_name or ds.find("style") is None:
             continue
-        if ds.find(f"column-instance[@name='{inst}']") is None:
+        if not any(c.get("name") == inst for c in ds.findall("column-instance")):
             return {}
         for e in ds.find("style").iter("encoding"):
             if e.get("attr") == "color" and e.get("field") == inst:
-                return _CMap({(m.findtext("bucket") or "").strip('"'): m.get("to")
-                              for m in e.findall("map") if m.get("to")})
+                return _CMap({(m.findtext("bucket") or "").strip('"'): _hex(m.get("to"))
+                              for m in e.findall("map") if _hex(m.get("to"))})
     return {}
 
 
@@ -3249,14 +3249,27 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
             elif z.kind not in ("empty", "blank"):
                 parts.append(f"<div class='zone' {attrs} style='{box};border:1px dashed #ddd'>"
                              f"<span class='lbl' style='font-size:9px;color:{MUTED}'>{_esc(z.kind)}</span></div>")
-    return (f"<!doctype html><html><head><meta charset='utf-8'><title>{_esc(title)} · {_esc(name)}</title>"
+    js = (f"window.addEventListener('load',()=>{{({FIT_JS})();const r=({PROBE_JS})();"
+          f"const e=document.createElement('script');e.type='application/json';e.id='probe-out';e.twkit=1;"
+          f"e.textContent=JSON.stringify(r);document.body.appendChild(e);}});")
+    return (f"<!doctype html><html><head><meta charset='utf-8'>{_csp(js)}"
+            f"<title>{_esc(title)} · {_esc(name)}</title>"
             f"<style>{font_css()}{CSS}</style></head><body>"
             f"<div class='canvas' data-page='{_esc(name)}' style='width:{cw}px;height:{ch}px'>"
             f"{''.join(parts)}</div><div class='stamp'>FRAME - a model, not Tableau - {cw}x{ch} {mode}</div>"
-            f"<script>window.addEventListener('load',()=>{{({FIT_JS})();const r=({PROBE_JS})();"
-            f"const e=document.createElement('script');e.type='application/json';e.id='probe-out';"
-            f"e.textContent=JSON.stringify(r);document.body.appendChild(e);}});</script>"
-            f"</body></html>")
+            f"<script>{js}</script></body></html>")
+
+
+PROBE_NODE = "[...document.querySelectorAll('#probe-out')].find(e => e.twkit === 1)"
+PROBE_READY = f"document.fonts.status === 'loaded' && !!{PROBE_NODE}"
+
+
+def _csp(js: str = "") -> str:
+    """Only the page's own script runs and nothing is fetched from the network."""
+    allow = f"'sha256-{base64.b64encode(hashlib.sha256(js.encode()).digest()).decode()}'" if js else "'none'"
+    return ("<meta http-equiv='Content-Security-Policy' content=\"default-src 'none'; "
+            f"script-src {allow}; style-src 'unsafe-inline'; img-src data: file:; font-src data: file:; "
+            "base-uri 'none'; form-action 'none'\">")
 
 
 def sheet_data(path: str, limit: int = 300) -> dict:
@@ -3371,7 +3384,7 @@ def publish(path: str, out_dir: str = "", limit: int = 300, default_locale: str 
     links = "".join(f"<li><a href='{os.path.basename(p['file'])}'>{_esc(p['page'])}</a></li>"
                     for p in pages)
     with open(os.path.join(dst, "index.html"), "w", encoding="utf-8") as f:
-        f.write(f"<!doctype html><meta charset='utf-8'><title>{_esc(title)}</title>"
+        f.write(f"<!doctype html><meta charset='utf-8'>{_csp()}<title>{_esc(title)}</title>"
                 f"<h3 style='font-family:Arial'>{_esc(title)}</h3><ol>{links}</ol>")
     return {"book": title, "folder": dst, "pages": pages, "data": note or "present",
             "how_to_view": "chrome-devtools new_page('file://' + page file); "
@@ -3438,9 +3451,8 @@ def _probe_cdp(page_file: str, shot: str = "") -> dict:
     m = canvas_size(open(page_file, encoding="utf-8").read())
     w, h = (int(m.group(1)) + 40, int(m.group(2)) + 40) if m else (1600, 1200)
     with cdp.Tab() as t:
-        t.open(url, w, h, "document.fonts.status === 'loaded' && "
-                          "!!document.getElementById('probe-out')")
-        out = json.loads(t.eval("document.getElementById('probe-out').textContent"))
+        t.open(url, w, h, PROBE_READY)
+        out = json.loads(t.eval(f"{PROBE_NODE}.textContent"))
         if shot:
             t.screenshot(shot)
             out["image"] = shot
@@ -3452,8 +3464,8 @@ def _probe_oneshot(page_file: str, shot: str = "") -> dict:
     m = canvas_size(open(page_file, encoding="utf-8").read())
     w, h = (int(m.group(1)) + 40, int(m.group(2)) + 40) if m else (1600, 1200)
     dom = _chrome(["--virtual-time-budget=2000", "--dump-dom", url])
-    mm = re.search(r'<script type="application/json" id="probe-out">(.*?)</script>', dom, re.S)
-    out = json.loads(html.unescape(mm.group(1))) if mm else {"error": "no measurement returned"}
+    mm = re.findall(r'<script type="application/json" id="probe-out">(.*?)</script>', dom, re.S)
+    out = json.loads(html.unescape(mm[-1])) if mm else {"error": "no measurement returned"}
     if shot:
         if os.path.exists(shot):
             os.unlink(shot)

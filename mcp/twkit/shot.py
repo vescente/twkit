@@ -87,10 +87,19 @@ _CAPTURE_TRIES = 4
 _CAPTURE_PAUSE = 2.0
 
 
+def _trusted(path: str) -> bool:
+    """A cached helper runs only if this user built it and nobody else can rewrite it."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return st.st_uid == os.getuid() and not st.st_mode & 0o022 and os.access(path, os.X_OK)
+
+
 def _window_lister() -> list:
     """Window listing command."""
     cache = os.path.join(tempfile.gettempdir(), "twkit_winlist")
-    if os.path.exists(cache) and os.access(cache, os.X_OK):
+    if _trusted(cache):
         return [cache]
     src = cache + ".swift"
     try:
@@ -108,7 +117,7 @@ def _window_lister() -> list:
 def _clicker() -> list:
     """Compiled click helper."""
     cache = os.path.join(tempfile.gettempdir(), "twkit_click")
-    if os.path.exists(cache) and os.access(cache, os.X_OK):
+    if _trusted(cache):
         return [cache]
     src = cache + ".swift"
     try:
@@ -126,7 +135,7 @@ def _clicker() -> list:
 def _typer() -> list:
     """Compiled typing helper."""
     cache = os.path.join(tempfile.gettempdir(), "twkit_type")
-    if os.path.exists(cache) and os.access(cache, os.X_OK):
+    if _trusted(cache):
         return [cache]
     src = cache + ".swift"
     try:
@@ -144,7 +153,7 @@ def _typer() -> list:
 def _parker() -> list:
     """Compiled cursor-park helper."""
     cache = os.path.join(tempfile.gettempdir(), "twkit_park")
-    if os.path.exists(cache) and os.access(cache, os.X_OK):
+    if _trusted(cache):
         return [cache]
     src = cache + ".swift"
     try:
@@ -369,6 +378,11 @@ def wait_progress(timeout: float = 180.0, pause: float = 2.0) -> dict:
 _KEY = {"a": 0, "c": 8, "d": 2, "v": 9, "w": 13}
 
 
+def _lit(text) -> str:
+    """An AppleScript string literal: window titles carry workbook names and reach scripts only so."""
+    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _osa(script: str, timeout: float = 25.0):
     try:
         return subprocess.run(["osascript", "-e", script],
@@ -510,7 +524,7 @@ def read_dialog() -> list:
              '  set frontmost to true\n'
              '  delay 0.4\n'
              f'  try\n'
-             f'    perform action "AXRaise" of (first window whose name is "{titles[0]}")\n'
+             f'    perform action "AXRaise" of (first window whose name is {_lit(titles[0])})\n'
              '    delay 0.3\n'
              '  end try\n'
              '  key code 8 using command down\n'
@@ -532,7 +546,7 @@ def _press_default(title: str = "") -> bool:
     raise_it = ""
     if title and title != _UNTITLED:
         raise_it = ('  try\n'
-                    f'    perform action "AXRaise" of (first window whose name is "{title}")\n'
+                    f'    perform action "AXRaise" of (first window whose name is {_lit(title)})\n'
                     '  end try\n')
     r = _osa('tell application "Tableau" to activate\n'
              'delay 0.4\n'
@@ -737,7 +751,7 @@ def close_tableau(wait: float = 60.0) -> dict:
     for name in _app_names():
         try:
             subprocess.run(["osascript", "-e",
-                            f'tell application "{name}" to quit saving no'],
+                            f'tell application {_lit(name)} to quit saving no'],
                            capture_output=True, timeout=10)
         except subprocess.TimeoutExpired:
             pass
@@ -821,7 +835,7 @@ def _close_window_strict(title: str) -> bool:
     """Close a window by address only."""
     if title not in _ax_all_windows():
         return False
-    lit = '"' + str(title).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    lit = _lit(title)
     r = _osa('tell application "System Events" to tell process "Tableau"\n'
              '  set frontmost to true\n'
              '  delay 0.3\n'
@@ -856,7 +870,7 @@ def _close_front_until_gone(title: str, tries: int = 6) -> bool:
 
 def _close_window(title: str) -> bool:
     """Close exactly this window via its close button, not Cmd+W."""
-    lit = '"' + str(title).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    lit = _lit(title)
     r = _osa('tell application "System Events" to tell process "Tableau"\n'
              '  set frontmost to true\n'
              '  delay 0.3\n'

@@ -28,7 +28,7 @@ def test_probe_uses_one_persistent_browser(tmp_path):
     page.write_text("<html><body><div class='canvas' style='width:100px;height:50px'>"
                     "<div class='zone' data-kind='text' data-id='1'>Hi</div></div>"
                     "<script>window.addEventListener('load',()=>{const e=document.createElement"
-                    "('script');e.type='application/json';e.id='probe-out';"
+                    "('script');e.type='application/json';e.id='probe-out';e.twkit=1;"
                     "e.textContent=JSON.stringify({zones:[1]});document.body.appendChild(e);});"
                     "</script></body></html>")
     shot = str(tmp_path / "s.png")
@@ -55,7 +55,8 @@ def test_title_lines_do_not_count_trailing_blank_padding(tmp_path):
                     "<div class='zone sheet' data-kind='worksheet' data-name='T' data-id='1' "
                     "style='width:300px;height:150px'><div class='ttl' style='font-size:20px'>Yesterday"
                     "<br><span> </span><br><span> </span></div></div></div>"
-                    "<div id='probe-out'></div></body></html>")
+                    "<script>const e=document.createElement('div');e.id='probe-out';e.twkit=1;"
+                    "document.body.appendChild(e);</script></body></html>")
     d, err = S.probe(str(page), {})
     title = next(z for z in d["zones"] if z["name"] == "T")["title"]
     assert title["lines"] == 1, title
