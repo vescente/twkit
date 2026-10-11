@@ -2598,7 +2598,9 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
                              havings)
         except _TcUnsupported as exc:
             return SheetResult(name, "skipped", note=f"{exc}: cannot be translated to SQL")
-    sql = f"{base} LIMIT {int(limit)}"
+    # the same rows on every run: without an order a LIMIT takes whatever the engine returns first
+    order = (" ORDER BY " + ", ".join(str(i + 1) for i in range(len(dims)))) if dims else ""
+    sql = f"{base}{order} LIMIT {int(limit)}"
     extra = {"base_sql": base, "dim_exprs": dims, "measure_exprs": measures,
              "dim_labels": dlab, "measure_labels": mlab, "dim_refs": dref, "measure_refs": mref,
              "where_sql": (" WHERE " + " AND ".join(wheres)) if wheres else "",

@@ -117,7 +117,7 @@ title or the dashboard name.
 | vertical alignment of text zones, text rotation, divider style, sheet title background, dashboard fill | default look |
 | phone layouts, stories (placeholders), single worksheets | main layout of each dashboard only |
 | a legend's own title (`edit_zone_title` on a legend) | the field caption |
-| rows beyond the dry run limit (300) | the first rows of an unordered query: a page can differ run to run |
+| rows beyond the dry run limit (300) | the first 300 rows in dimension order |
 Hover-only content is drawn too: a custom tooltip becomes the zone's `title`, filled from the first mark.
 Row labels follow Tableau: one line with an ellipsis, even in a taller row (`cell` height) and with
 `wrap` on (checked in Desktop).
