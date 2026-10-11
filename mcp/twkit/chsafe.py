@@ -1,4 +1,4 @@
-"""Keep the password out of tracebacks."""
+"""ClickHouse safety: secrets out of tracebacks; untrusted SQL only as one read statement."""
 from __future__ import annotations
 
 import functools
@@ -52,6 +52,12 @@ _OUTSIDE = {
     "sqlite", "url", "urlcluster", "cosn", "oss", "gcs", "icebergazure", "iceberghdfs",
     "iceberglocal", "icebergs3cluster", "deltalakecluster", "hudicluster", "paimon",
     "dictionary", "loop", "merge", "mergetreeindex", "fuzzjson", "fuzzquery",
+    "arrowflight", "ytsaurus", "prometheusquery", "prometheusqueryrange", "deltalakes3",
+    "deltalakeazure", "deltalakelocal", "deltalakes3cluster", "deltalakeazurecluster",
+    "icebergazurecluster", "iceberghdfscluster", "icebergcluster", "paimons3", "paimonazure",
+    "paimonhdfs", "paimonlocal", "paimons3cluster", "paimonazurecluster", "paimonhdfscluster",
+    "viewifpermitted", "timeseriesdata", "timeseriesmetrics", "timeseriestags",
+    "timeseriesselector", "mergetreeprojection", "mergetreeanalyzeindexes",
 }
 
 
@@ -107,6 +113,9 @@ def _code_only(sql: str) -> str:
             i = j + 2
         elif c in "$#":
             raise PermissionError(f"refused: '{c}' outside a string reads two ways")
+        elif ord(c) > 127:
+            raise PermissionError(f"refused: '{c}' outside a string reads two ways "
+                                  f"(ClickHouse takes curly quotes as quotes)")
         else:
             out.append(c)
             i += 1
@@ -143,6 +152,11 @@ def read_only(sql: str, heads: tuple = READ_HEADS) -> str:
     return sql
 
 
+# Keywords that precede a bracket without calling anything.
+_NOT_CALLS = ("FROM", "JOIN", "IN", "AS", "SELECT", "WHERE", "AND", "OR", "ON", "NOT", "EXISTS",
+              "ALL", "ANY", "UNION", "WITH", "USING", "OVER", "BY", "WHEN", "THEN", "ELSE", "CASE",
+              "HAVING", "DISTINCT")
+
 _CLAUSE_END = {"WHERE", "PREWHERE", "GROUP", "ORDER", "LIMIT", "HAVING", "UNION", "SETTINGS",
                "FORMAT", "WINDOW", "QUALIFY", "INTERSECT", "EXCEPT", "OFFSET", "SAMPLE"}
 
@@ -151,16 +165,28 @@ def _table_functions(code: str) -> list:
     """Names called in a table position: after FROM, JOIN, IN, or a comma inside a FROM list.
 
     `EXTRACT(YEAR FROM f(x))`, `SUBSTRING(s FROM n)` and `IS DISTINCT FROM f(x)` are scalars.
+    A bracket opening SELECT or WITH is a subquery wherever it stands (`view(SELECT ...)`), and a
+    bracket in a table position keeps the position (`FROM (f(...))`).
     """
     toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[(),]", code)
     calls, in_from, found = [], [False], []
+
+    def tok(k):
+        return toks[k].upper() if 0 <= k < len(toks) else ""
+
+    def table_pos(k, bracket=False):
+        prev = tok(k - 1)
+        after_from = prev in ("FROM", "JOIN") and tok(k - 2) != "DISTINCT"
+        in_call = bool(calls and calls[-1])
+        return (prev == "IN" and not bracket) or \
+            (not in_call and (after_from or (prev in (",", "(") and in_from[-1])))
+
     for k, t in enumerate(toks):
-        prev = toks[k - 1].upper() if k else ""
+        prev = tok(k - 1)
         if t == "(":
-            calls.append(k > 0 and toks[k - 1] not in "()," and prev not in
-                         ("FROM", "JOIN", "IN", "AS", "SELECT", "WHERE", "AND", "OR", "ON",
-                          "NOT", "EXISTS", "ALL", "ANY", "UNION", "WITH"))
-            in_from.append(False)
+            sub = tok(k + 1) in ("SELECT", "WITH")
+            calls.append(not sub and k > 0 and toks[k - 1] not in "()," and prev not in _NOT_CALLS)
+            in_from.append(not sub and not calls[-1] and table_pos(k, bracket=True))
             continue
         if t == ")":
             calls and calls.pop()
@@ -172,9 +198,8 @@ def _table_functions(code: str) -> list:
             in_from[-1] = True
         elif up in _CLAUSE_END:
             in_from[-1] = False
-        if t in "()," or (toks[k + 1] if k + 1 < len(toks) else "") != "(":
+        if t in "()," or up in _NOT_CALLS or tok(k + 1) != "(":
             continue
-        after_from = prev in ("FROM", "JOIN") and (k < 2 or toks[k - 2].upper() != "DISTINCT")
-        if prev == "IN" or (not in_call and (after_from or (prev == "," and in_from[-1]))):
+        if table_pos(k):
             found.append(t)
     return found

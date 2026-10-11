@@ -1,4 +1,4 @@
-"""Materialise a database table into a Tableau extract (`.hyper`)."""
+"""Materialise a database table or a workbook's Custom SQL into a Tableau extract (`.hyper`)."""
 from __future__ import annotations
 
 HYPER_QUIET = {"log_config": ""}

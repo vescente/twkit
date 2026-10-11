@@ -15,7 +15,7 @@ from `preflight`. Add a row when you add a module.
 | `canon.py` | channel: metrics | metric definitions as executable checks on formulas and SQL |
 | `cdp.py` | view | one persistent headless Chrome for the frame, over CDP (own port and profile) |
 | `chclient.py` | data | minimal ClickHouse HTTP client when no settings module provides one |
-| `chsafe.py` | security | keep secrets out of ClickHouse tracebacks; SQL from a workbook or a tool runs only as one read statement (`read_only`), with `readonly=1` on the built-in client; text that ClickHouse and Hyper would read differently (nested comments, a lone `\r`, backslash quotes, `$`, `#`) is refused |
+| `chsafe.py` | security | keep secrets out of ClickHouse tracebacks; SQL from a workbook or a tool runs only as one read statement (`read_only`), with `readonly=1` on the built-in client; text that ClickHouse and Hyper would read differently (nested comments, a lone `\r`, backslash quotes, `$`, `#`, curly quotes and any non-ASCII outside a string) is refused; table functions are checked in every table position, inside `view(SELECT ...)` and bracketed `FROM (...)` too |
 | `contentfit.py` | build | sizes from content: table column widths, header bands, title room; layout rows that keep tables at content height |
 | `conn.py` | build | data source connections: CSV, Hyper (several tables related on a shared column), MySQL table or Custom SQL |
 | `config.py` | settings | where connection parameters and data paths come from (`~/.twkit/config.toml`) |

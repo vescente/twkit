@@ -1,4 +1,8 @@
-"""Frame: a Tableau workbook rendered as a local HTML page for viewing in Chrome."""
+"""Frame: a Tableau workbook rendered as a local HTML page for viewing in Chrome.
+
+Workbook text reaches the page escaped, colours and fonts only after a strict check, and the
+page runs only its own script.
+"""
 from __future__ import annotations
 
 import base64

@@ -125,3 +125,31 @@ def test_hostile_workbook_strings_never_become_page_markup(tmp_path):
         assert "u" not in names, f"workbook text became markup on {pg['page']}"
         assert names.count("script") == 1
         assert any(a.get("http-equiv") == "Content-Security-Policy" for t, a in p.tags if t == "meta")
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM view(SELECT * FROM someNewFn('h'))",
+    "SELECT * FROM (someNewFn('h'))",
+    "SELECT * FROM numbers(1) WHERE ‘'’ = '' , url('http://x', CSV, 'a String') --'",
+    "SELECT “x” FROM t",
+    "SELECT * FROM viewIfPermitted(SELECT 1 ELSE null('a Int8'))",
+    "SELECT * FROM t WHERE x IN someNewFn('h')",
+])
+def test_table_functions_hidden_from_the_guard_are_refused(sql):
+    with pytest.raises(PermissionError):
+        chsafe.read_only(sql)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM t WHERE d IN (toDate('2026-01-01'), toDate('2026-02-01'))",
+    "SELECT * FROM view(SELECT number FROM numbers(3))",
+    "SELECT * FROM t JOIN u ON (t.a = lower(u.b))",
+    "SELECT 'Zürich' AS r, count() FROM t -- naïve note\n",
+    "SELECT * FROM (SELECT 1) AS a, (SELECT 2) AS b",
+])
+def test_ordinary_reads_still_pass(sql):
+    assert chsafe.read_only(sql) == sql
+
+
+def test_a_keyword_before_a_bracket_is_never_a_table_function():
+    assert chsafe._table_functions("SELECT * FROM a, b, FROM (SELECT 1)") == []

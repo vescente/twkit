@@ -1,4 +1,6 @@
-"""Channel 4: a screenshot of the Tableau window — the product's own render."""
+"""Channel 4: a screenshot of the Tableau window — the product's own render.
+
+Window titles carry workbook names and reach AppleScript only as escaped literals."""
 from __future__ import annotations
 
 import json
