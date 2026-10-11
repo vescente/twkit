@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 
 DATA_HEADS = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXISTS", "WITH")
+# memory per untrusted query: the server itself has no cap (max_memory_usage = 0)
+READ_MEMORY = 3_000_000_000
 
 
 _TSV_ESCAPES = {"b": "\b", "f": "\f", "r": "\r", "n": "\n", "t": "\t", "0": "\0",
@@ -52,9 +54,16 @@ class HttpClickhouse:
         import requests                       # noqa: PLC0415 — optional dependency
         import urllib.parse                   # noqa: PLC0415 — local by design
 
-        qs = "&".join(x for x in (self._qs, urllib.parse.urlencode(params or {})) if x)
+        params = dict(params or {})
         if self._read_only and not self._account_read_only():
-            qs = "&".join(x for x in (qs, "readonly=1") if x)
+            # untrusted SQL also gets server limits; they must precede readonly=1 in the URL
+            for k, v in (("max_execution_time", self._timeout), ("max_memory_usage", READ_MEMORY),
+                         ("max_bytes_before_external_group_by", READ_MEMORY // 3),
+                         ("cancel_http_readonly_queries_on_client_close", 1)):
+                params.setdefault(k, v)
+            qs = "&".join(x for x in (self._qs, urllib.parse.urlencode(params), "readonly=1") if x)
+        else:
+            qs = "&".join(x for x in (self._qs, urllib.parse.urlencode(params)) if x)
         try:
             return self._session.post(f"{self._url}?{qs}", data=body,
                                       headers=self._headers, verify=self._verify,

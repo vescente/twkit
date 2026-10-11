@@ -287,3 +287,21 @@ def test_a_bracket_after_from_inside_extract_is_a_scalar():
 def test_a_table_function_in_brackets_after_from_is_still_checked():
     with pytest.raises(PermissionError, match="not on the allowed list"):
         chsafe.read_only("SELECT * FROM (generateSeries2(1, 5))")
+
+
+def test_read_only_queries_carry_server_limits_before_readonly():
+    from twkit.chclient import HttpClickhouse
+    c = HttpClickhouse("h", "8443", "u", "p", read_only=True)
+    seen = []
+
+    class _S:
+        def post(self, url, **k):
+            seen.append(url)
+            return type("R", (), {"status_code": 200, "text": "1\n"})()
+
+    c._session = _S()
+    c._account_read_only = lambda: False
+    c._request(b"SELECT 1")
+    qs = seen[0].split("?", 1)[1]
+    assert "max_memory_usage=3000000000" in qs and "max_execution_time=" in qs
+    assert qs.index("max_memory_usage") < qs.index("readonly=1"), "a setting after readonly=1 is refused"
