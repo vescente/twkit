@@ -122,6 +122,11 @@ def preflight(path: str, db: str = "", table: str = "",
         if skipped:
             gaps.append(f"{len(skipped)} sheets with LOD/table calculations "
                         f"not checked by the dry run")
+        loose = [s for s in sheets if getattr(s, "untranslated", None)]
+        if loose:
+            gaps.append(f"filters not applied by the dry run on {len(loose)} sheets "
+                        f"({loose[0].sheet}: {', '.join(loose[0].untranslated[:3])}): "
+                        f"the run saw more rows than Tableau shows")
 
     st, err = _safe(dryrun.dry_run_states, path, "", db, table)
     if err or st is None:

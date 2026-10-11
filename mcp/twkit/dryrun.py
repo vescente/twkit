@@ -36,6 +36,7 @@ class SheetResult:
     base_sql: str = ""
     where_sql: str = ""
     nodate_where_sql: str = ""     # the WHERE without date filters: why_empty tells period from defect
+    untranslated: list = field(default_factory=list)   # filters the run could not apply
     synthetic_measure: bool = False
     relaxed: str = ""
     dim_exprs: list = field(default_factory=list)
@@ -2470,6 +2471,7 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     havings: list[str] = []
     filter_sources = list(ws.iter("filter")) + shared_filters_for(ws, shared_filters)
     date_conds: list[str] = []                    # relative date filters: dates by construction
+    untranslated: list[str] = []                  # filters that restrict rows but were not translated
     date_cols = getattr(target, "date_cols", set()) or set()
 
     def _on_dates(cond: str) -> bool:
@@ -2491,12 +2493,16 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
                 wheres.append(cond)
             elif level == "agg" and _outer_ok(cond, tr):
                 havings.append(cond)
+            elif cond:
+                untranslated.append(field_name)
             return
         if fl.get("class") == "relative-date":
             cond = _relative_where(fl, f_agg, field_name, tr, target, dynamic)
             if cond:
                 wheres.append(cond)
                 date_conds.append(cond)
+            else:
+                untranslated.append(field_name)
             return
         members = [g.get("member") for g in fl.iter("groupfilter") if g.get("member")]
         if field_name in tr.calcs:
@@ -2511,8 +2517,12 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
             listed = _member_list(members, tr) if not boolean and members and \
                 fl.get("class") == "categorical" and not funcs - {"member", "union", None} else ""
             if not boolean and not listed:
+                if members:
+                    untranslated.append(field_name)
                 return
             expr, why = tr.to_sql(tr.calcs[field_name])
+            if why or not expr:
+                untranslated.append(field_name)
             if not why and expr:
                 if boolean and negate:
                     expr = f"NOT ({expr})"
@@ -2526,6 +2536,12 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
                 else:
                     wheres.append(cond)
             return
+        funcs = {g.get("function") for g in fl.iter("groupfilter")}
+        if fl.get("class") == "categorical" and \
+                funcs - {"member", "union", "level-members", "except", "reorder-dimensionality",
+                         "crossjoin", None}:
+            untranslated.append(field_name)            # a condition, top N or wildcard on members
+            return
         if fl.get("class") != "categorical" or not members:
             return
         excluded = _except_conditions(fl, tr)
@@ -2534,6 +2550,7 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
             return
         funcs = {g.get("function") for g in fl.iter("groupfilter")}
         if funcs - {"member", "union", "level-members", None}:
+            untranslated.append(field_name)
             return
         vals = []
         for mem in members:
@@ -2608,6 +2625,7 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     extra = {"base_sql": base, "dim_exprs": dims, "measure_exprs": measures,
              "dim_labels": dlab, "measure_labels": mlab, "dim_refs": dref, "measure_refs": mref,
              "where_sql": (" WHERE " + " AND ".join(wheres)) if wheres else "",
+             "untranslated": sorted(set(untranslated)),
              "nodate_where_sql": (" WHERE " + " AND ".join(w for w in wheres if not _on_dates(w)))
              if any(not _on_dates(w) for w in wheres) else "",
              "synthetic_measure": synthetic,

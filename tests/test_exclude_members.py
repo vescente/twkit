@@ -262,3 +262,28 @@ def test_why_empty_reads_the_sheets_own_extract(tmp_path):
             zout.writestr(n, body if n.endswith(".twb") else zin.read(n))
     item = next(x for x in dryrun.why_empty(dst)["sheets"] if x["sheet"] == "flow sheet")
     assert "excludes every row" in item["reason"], item
+
+
+def test_dry_run_names_filters_it_could_not_apply(tmp_path):
+    import zipfile
+
+    from lxml import etree
+
+    from twkit import dryrun, safexml
+    from tests.test_dryrun_two_extracts import _book
+
+    src = _book(tmp_path)
+    root = safexml.from_twbx(src)
+    ws = next(w for w in root.iter("worksheet") if w.get("name") == "main sheet")
+    ds_name = ws.find("table/view/datasources/datasource").get("name")
+    ws.find("table/view").append(etree.fromstring(
+        f"<filter class='categorical' column='[{ds_name}].[none:metric:nk]'>"
+        f"<groupfilter function='filter' expression='LEN([metric]) &gt; 2'>"
+        f"<groupfilter function='level-members' level='[none:metric:nk]'/></groupfilter></filter>"))
+    body = etree.tostring(root, xml_declaration=True, encoding="utf-8", standalone=True)
+    dst = str(tmp_path / "cond.twbx")
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for n in zin.namelist():
+            zout.writestr(n, body if n.endswith(".twb") else zin.read(n))
+    r = {x.sheet: x for x in dryrun.dry_run(dst, limit=100)}["main sheet"]
+    assert r.untranslated == ["metric"], r
