@@ -72,3 +72,81 @@ def test_book_without_custom_sql_refused(tmp_path):
     res = EX.to_extract(str(p))
     assert res["ok"] is False
     assert "nothing to materialize" in res["why"]
+
+
+_GRAPH = """      <object-graph>
+        <objects>
+          <object caption='Custom SQL Query' id='Custom SQL Query_0A1B'>
+            <properties context=''>
+              <relation connection='mysql.x' name='Custom SQL Query' type='text'>SELECT 1</relation>
+            </properties>
+          </object>
+        </objects>
+      </object-graph>
+      <layout dim-ordering='alphabetic' measure-ordering='alphabetic' show-structure='true' />
+    </datasource>"""
+
+
+def _live_book(tmp_path):
+    twb = _TWB.replace("""<metadata-record class='column'>
+            <parent-name>[Custom SQL Query]</parent-name>
+          </metadata-record>""", "".join(
+        f"<metadata-record class='column'><remote-name>{n}</remote-name><remote-type>{rt}</remote-type>"
+        f"<local-name>[{n}]</local-name><parent-name>[Custom SQL Query]</parent-name>"
+        f"<remote-alias>{n}</remote-alias><ordinal>{i + 1}</ordinal><local-type>{lt}</local-type>"
+        f"<aggregation>Sum</aggregation><contains-null>true</contains-null></metadata-record>"
+        for i, (n, rt, lt) in enumerate((("Month", "133", "date"), ("Money", "5", "real")))))
+    twb = twb.replace("\n    </datasource>", "\n" + _GRAPH, 1)
+    p = tmp_path / "Live.twbx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("Live.twb", twb)
+        z.writestr("Data/Extracts/old.hyper", b"stale")
+    return str(p)
+
+
+def test_extract_keeps_the_sql_underneath_like_desktop(tmp_path, monkeypatch):
+    from twkit import safexml
+
+    def fake_hyper(sql, out, table, types=None):
+        assert sql.strip() == "SELECT 1"
+        open(out, "wb").write(b"hyper")
+        return {"rows": 7, "columns": 2}
+
+    monkeypatch.setattr(EX, "build_hyper_from_sql", fake_hyper)
+    out = str(tmp_path / "Live (extract).twbx")
+    res = EX.to_extract(_live_book(tmp_path), out)
+    assert res["ok"] and res["row_count"] == 7
+    root = safexml.from_twbx(out)
+    ds = root.find("datasources/datasource")
+    live = ds.find("connection/relation[@type='text']")
+    assert live is not None and live.text == "SELECT 1"
+    assert ds.find("connection/named-connections/named-connection/connection").get("class") == "mysql"
+    conn = ds.find("extract/connection")
+    assert ds.find("extract").get("enabled") == "true" and conn.get("class") == "hyper"
+    assert conn.find("relation").get("table") == "[Extract].[Extract]"
+    assert conn.find("refresh/refresh-event").get("rows-inserted") == "7"
+    recs = conn.findall("metadata-records/metadata-record")
+    assert [r.findtext("remote-name") for r in recs] == ["Month", "Money"]
+    assert {r.findtext("parent-name") for r in recs} == {"[Extract]"}
+    assert {r.findtext("object-id") for r in recs} == {"[Custom SQL Query_0A1B]"}
+    ctx = ds.find("object-graph/objects/object/properties[@context='extract']/relation")
+    assert ctx is not None and ctx.get("table") == "[Extract].[Extract]"
+    tags = [c.tag for c in ds]
+    assert tags.index("extract") < tags.index("layout") < tags.index("object-graph")
+    names = zipfile.ZipFile(out).namelist()
+    assert conn.get("dbname") in names and "Live (extract).twb" in names
+    assert "Data/Extracts/old.hyper" in names, "an unrelated packaged file is kept"
+
+
+def test_extract_replaces_its_own_previous_extract(tmp_path, monkeypatch):
+    from twkit import safexml
+    monkeypatch.setattr(EX, "build_hyper_from_sql",
+                        lambda sql, out, table, types=None: (open(out, "wb").write(b"h"),
+                                                             {"rows": 1, "columns": 2})[1])
+    first = str(tmp_path / "a.twbx")
+    second = str(tmp_path / "b.twbx")
+    EX.to_extract(_live_book(tmp_path), first)
+    EX.to_extract(first, second)
+    ds = safexml.from_twbx(second).find("datasources/datasource")
+    assert len(ds.findall("extract")) == 1
+    assert len(ds.findall("object-graph/objects/object/properties[@context='extract']")) == 1

@@ -169,3 +169,12 @@ def test_a_binary_file_named_csv_is_refused(tmp_path):
     p.write_bytes(b"\0\1\2binary")
     with pytest.raises(PermissionError, match="not text"):
         Book().set_csv_connection(str(p))
+
+
+def test_checked_save_names_the_inner_workbook_after_the_file(tmp_path):
+    import zipfile
+    from twkit.server.tools_book import save_checked
+    out = tmp_path / "My Book.twbx"
+    assert save_checked(Book(), str(out)).startswith("Saved")
+    assert [n for n in zipfile.ZipFile(out).namelist() if n.endswith(".twb")] == ["My Book.twb"]
+    assert [p.name for p in tmp_path.iterdir()] == ["My Book.twbx"]

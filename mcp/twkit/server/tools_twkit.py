@@ -684,9 +684,10 @@ def screenshot_param_states(path: str, param: str, values: str = "",
 def save_as_extract(path: str, out_path: str = "") -> str:
     """Materialize the workbook's live Custom SQL into a packaged .hyper extract.
 
-    With an extract the workbook opens without a password or VPN. Column types come from the
-    workbook declarations, not from guessing. The source workbook is untouched; the result is
-    written next to it as "<name> (extract).twbx".
+    With an extract the workbook opens without a password or VPN. The SQL stays under the
+    extract, as Tableau Desktop writes it, so a server can refresh the extract on a schedule.
+    Column types come from the workbook declarations, not from guessing. The source workbook is
+    untouched; the result is written next to it as "<name> (extract).twbx".
     """
     from twkit import extract as EX
     if not os.path.exists(path):

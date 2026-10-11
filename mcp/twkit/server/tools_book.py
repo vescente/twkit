@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 
 from ..book import Book
 from .app import server
@@ -30,8 +32,15 @@ def save_checked(book: Book, output_path: str, force: bool = False) -> str:
         return f"REFUSED: {exc}"
     if not str(output_path).lower().endswith(".twbx"):
         return "REFUSED: save as .twbx only (file_format_rule)"
-    base, ext = os.path.splitext(str(output_path))
-    tmp = f"{base}.checking{ext}"
+    work = tempfile.mkdtemp(prefix=".twkit-check-", dir=os.path.dirname(os.path.abspath(output_path)))
+    try:
+        return _save_in(book, output_path, os.path.join(work, os.path.basename(output_path)), force)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _save_in(book: Book, output_path: str, tmp: str, force: bool) -> str:
+    """The check-then-move of save_checked; `tmp` keeps the final file name for the inner .twb."""
     book.save(tmp)
     problems, note = [], ""
     try:
@@ -48,7 +57,6 @@ def save_checked(book: Book, output_path: str, force: bool = False) -> str:
         note = (f"\n! CHECKS NOT RUN ({type(exc).__name__}: {str(exc)[:70]}); "
                 f"blockers NOT ruled out")
     if problems and not force:
-        os.unlink(tmp)
         return ("NOT SAVED: the workbook has a blocker:\n  - " + "\n  - ".join(problems)
                 + "\n\nFix it (edit_fit_to_extract / edit_drop_fields) and save again, "
                   "or save_workbook(..., force=True) if intended.")

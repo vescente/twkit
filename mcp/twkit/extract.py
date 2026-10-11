@@ -762,50 +762,116 @@ def build_hyper_from_csv(csv_path: str, out_path: str, table: str = "Extract",
 
 
 def to_extract(book_path: str, out_path: str = "", table: str = "Extract") -> dict:
-    """Switch a workbook from a live query to a packaged .hyper."""
+    """Package a .hyper of each live Custom SQL source, keeping the SQL underneath.
+
+    Written the way Tableau Desktop writes an extract: the live connection stays, `<extract>`
+    points at the packaged file and the object graph gains an `extract` context. Tableau reads
+    the extract (no password, no VPN); Tableau Cloud can refresh it from the SQL on a schedule.
+    The source workbook is untouched.
+    """
     import re
     import shutil
     import zipfile
-
-    sql = workbook_sql(book_path)
-    if not sql:
-        return {"ok": False, "why": "the workbook has no Custom SQL; nothing to materialize"}
-    out_path = out_path or book_path.replace(".twbx", " (extract).twbx")
+    from . import order as ORD
+    from . import safexml
     from .owner import check_write
+
+    root = (safexml.from_twbx(book_path) if book_path.lower().endswith(".twbx")
+            else safexml.from_file(book_path))
+    sources = [(ds, rel) for ds in root.iter("datasource")
+               for rel in [ds.find("connection/relation[@type='text']")]
+               if rel is not None and (rel.text or "").strip()]
+    if not sources:
+        return {"ok": False, "why": "the workbook has no Custom SQL; nothing to materialize"}
+    for ds, _ in sources:
+        n = len(ds.findall("object-graph/objects/object"))
+        if n > 1:
+            return {"ok": False, "why": f"{ds.get('caption') or ds.get('name')}: {n} logical tables; "
+                                        f"only one-table sources are extracted"}
+    out_path = out_path or book_path.replace(".twbx", " (extract).twbx")
     check_write(out_path)
-    stem = os.path.splitext(os.path.basename(out_path))[0]
-    hyper_rel = f"Data/{stem}.hyper"
-    hyper_abs = os.path.join(tempfile.mkdtemp(prefix="twkit_hyper_"), f"{stem}.hyper")
-    built = build_hyper_from_sql(sql, hyper_abs, table,
-                                 types=workbook_column_types(book_path))
-
-    with zipfile.ZipFile(book_path) as z:
-        items = [(i.filename, z.read(i.filename)) for i in z.infolist()]
-    twb = next(n for n, _ in items if n.lower().endswith(".twb"))
-    xml = dict(items)[twb].decode("utf-8")
-
-    conn_name = "hyper.twkit_extract"
-    named = (f"<named-connection caption='{stem}' name='{conn_name}'>"
-             f"<connection authentication='auth-none' author-locale='en_US' class='hyper' "
-             f"dbname='{hyper_rel}' default-settings='yes' sslmode='' "
-             f"workgroup-auth-mode='as-is' /></named-connection>")
-    xml = re.sub(r"<named-connection\b.*?</named-connection>", named, xml, flags=re.S)
-    xml = re.sub(r"<relation\b[^>]*type=['\"]text['\"]\s*>.*?</relation>",
-                 f"<relation connection='{conn_name}' name='Extract' "
-                 f"table='[Extract].[{table}]' type='table' />", xml, flags=re.S)
-    xml = re.sub(r"<parent-name>\[Custom SQL Query\d*\]</parent-name>",
-                 f"<parent-name>[{table}]</parent-name>", xml)
-    xml = re.sub(r'value="\[Custom SQL Query\d*\]\.', f'value="[{table}].', xml)
-    xml = re.sub(r"value='\[Custom SQL Query\d*\]\.", f"value='[{table}].", xml)
-
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, data in items:
-            if name.lower().endswith(".twb"):
-                z.writestr(name, xml.encode("utf-8"))
-            elif not name.lower().endswith(".hyper"):
-                z.writestr(name, data)
-        z.write(hyper_abs, hyper_rel)
-    shutil.rmtree(os.path.dirname(hyper_abs), ignore_errors=True)
-    return {"ok": True, "file": out_path, "row_count": built["rows"],
-            "column_count": built["columns"],
+    types = workbook_column_types(book_path)
+    work = tempfile.mkdtemp(prefix="twkit_hyper_")
+    try:
+        members, dropped, built = {}, set(), []
+        for ds, rel in sources:
+            caption = ds.get("caption") or rel.get("name") or "Extract"
+            stem = re.sub(r"[^\w\- ().&]+", "_", caption)
+            hyper_rel = f"Data/Extracts/{stem}.hyper"
+            while hyper_rel in members:
+                hyper_rel = hyper_rel[:-6] + "_.hyper"
+            hyper_abs = os.path.join(work, f"{len(members)}.hyper")
+            res = build_hyper_from_sql(rel.text, hyper_abs, table, types=types)
+            for old in ds.findall("extract"):
+                dropped.update(c.get("dbname") for c in old.iter("connection") if c.get("dbname"))
+                ds.remove(old)
+            _extract_node(ds, rel, hyper_rel, table, res["rows"], caption)
+            ORD.normalize_datasource(ds)
+            members[hyper_rel] = hyper_abs
+            built.append({"source": caption, "file": hyper_rel, "rows": res["rows"],
+                          "columns": res["columns"]})
+        names = []
+        if book_path.lower().endswith(".twbx"):
+            with zipfile.ZipFile(book_path) as z:
+                names = [n for n in z.namelist() if not n.lower().endswith(".twb")]
+        packed = {n: (book_path, n) for n in names if n not in dropped and n not in members}
+        packed.update(members)
+        tmp_out = os.path.join(work, os.path.basename(out_path))
+        safexml.write_twbx(root, tmp_out,
+                           os.path.splitext(os.path.basename(out_path))[0] + ".twb", packed)
+        shutil.move(tmp_out, out_path)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return {"ok": True, "file": out_path, "sources": built,
+            "row_count": sum(b["rows"] for b in built), "column_count": built[0]["columns"],
             "size_mb": round(os.path.getsize(out_path) / 1024 / 1024, 2)}
+
+
+def _extract_node(ds, rel, hyper_rel: str, table: str, rows: int, caption: str) -> None:
+    """`<extract>` as Tableau Desktop writes it over a live Custom SQL source."""
+    import datetime
+    now = datetime.datetime.now()
+    table_ref = f"[Extract].[{table}]"
+
+    def node(parent, tag, attrs=()):
+        e = etree.SubElement(parent, tag)
+        for k, v in attrs:
+            e.set(k, v)
+        return e
+
+    ex = node(ds, "extract", (("count", "-1"), ("enabled", "true"), ("object-id", ""),
+                              ("units", "records")))
+    conn = node(ex, "connection", (
+        ("access_mode", "readonly"), ("authentication", "auth-none"), ("author-locale", "en_US"),
+        ("class", "hyper"), ("dbname", hyper_rel), ("default-settings", "yes"),
+        ("schema", "Extract"), ("sslmode", ""), ("tablename", table),
+        ("update-time", now.strftime("%m/%d/%Y %I:%M:%S %p")),
+        ("username", "tableau_internal_user")))
+    node(conn, "relation", (("name", "Extract"), ("table", table_ref), ("type", "table")))
+    node(node(conn, "refresh"), "refresh-event", (
+        ("add-from-file-path", caption), ("increment-value", "%null%"), ("refresh-type", "create"),
+        ("rows-inserted", str(rows)), ("timestamp-start", now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3])))
+    obj = ds.find("object-graph/objects/object")
+    oid = obj.get("id") if obj is not None else ""
+    recs = node(conn, "metadata-records")
+    live = [m for m in ds.findall("connection/metadata-records/metadata-record")
+            if m.get("class") == "column"]
+    for i, m in enumerate(live):
+        name = m.findtext("remote-name") or ""
+        rec = node(recs, "metadata-record", (("class", "column"),))
+        for tag, text in (("remote-name", name), ("remote-type", m.findtext("remote-type")),
+                          ("local-name", m.findtext("local-name") or f"[{name}]"),
+                          ("parent-name", "[Extract]"),
+                          ("remote-alias", m.findtext("remote-alias") or name),
+                          ("ordinal", str(i)), ("family", rel.get("name")),
+                          ("local-type", m.findtext("local-type")),
+                          ("aggregation", m.findtext("aggregation")),
+                          ("contains-null", m.findtext("contains-null") or "true"),
+                          ("object-id", f"[{oid}]" if oid else None)):
+            if text is not None:
+                etree.SubElement(rec, tag).text = text
+    if obj is not None:
+        for old in obj.findall("properties[@context='extract']"):
+            obj.remove(old)
+        node(node(obj, "properties", (("context", "extract"),)), "relation",
+             (("name", "Extract"), ("table", table_ref), ("type", "table")))

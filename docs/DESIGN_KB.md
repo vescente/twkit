@@ -413,7 +413,7 @@ A slow dashboard is a broken dashboard: readers stop opening it.
 
 | lever | rule |
 |---|---|
-| extracts | Ship a `.hyper` extract: `save_as_extract` materializes the live Custom SQL inside the package, so the workbook opens without a password or VPN and the source is not queried on every open. Hide unused fields first; aggregate to the visible grain where possible |
+| extracts | Ship a `.hyper` extract: `save_as_extract` materializes the live Custom SQL inside the package, so the workbook opens without a password or VPN and the source is not queried on every open. The SQL stays under the extract, as Desktop writes it, so a server can refresh the extract on a schedule. Hide unused fields first; aggregate to the visible grain where possible |
 | fewer sheets | Every sheet is a query. One parameterized view beats five toggled sheets (§7) |
 | fewer marks | Hundreds of marks per view, not tens of thousands. A text table with thousands of rows is slow and unreadable: detail goes behind a filter or an action |
 | context filters | Put the narrowing filter in context (`edit_filter_context`); dependent filters and top-N then work on the smaller set |
