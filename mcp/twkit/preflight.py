@@ -78,6 +78,9 @@ def preflight(path: str, db: str = "", table: str = "",
     if err:
         report["channels"]["metrics"] = f"not run: {err}"
         gaps.append("metric canon not checked")
+    elif not canon.rules():
+        report["channels"]["metrics"] = "not run: no metric canon file (config [paths] canon)"
+        gaps.append("metric canon not checked: no canon file")
     else:
         bad = [r for r in (res or []) if getattr(r, "severity", "") == "error"]
         report["channels"]["metrics"] = f"canon violations {len(bad)}"

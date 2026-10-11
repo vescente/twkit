@@ -711,6 +711,10 @@ def rename_worksheet(root, old: str, new: str) -> dict:
     """Rename a SHEET everywhere Tableau stores its name."""
     if not new or new == old:
         return {"renamed": 0}
+    if any(ws.get("name") == new for ws in root.iter("worksheet")) or \
+            any(d.get("name") == new for d in root.iter("dashboard")):
+        raise ValueError(f"a sheet or dashboard named {new!r} already exists: two sheets with one "
+                         f"name break the workbook's references")
     hits = {"worksheet": 0, "zone": 0, "viewpoint": 0, "window": 0, "action": 0}
     for ws in root.iter("worksheet"):
         if ws.get("name") == old:

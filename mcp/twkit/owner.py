@@ -376,7 +376,7 @@ def opened_in_tableau(path: str) -> str:
     import subprocess
     d = os.path.dirname(os.path.abspath(path))
     stem = os.path.splitext(os.path.basename(path))[0]
-    locks = glob.glob(os.path.join(d, f".~{stem}__*.twbr"))
+    locks = glob.glob(os.path.join(glob.escape(d), f".~{glob.escape(stem)}__*.twbr"))
     for lock in locks:
         try:
             r = subprocess.run(["lsof", "--", lock], capture_output=True,
@@ -395,7 +395,7 @@ def stale_locks(path: str) -> list:
     d = os.path.dirname(os.path.abspath(path))
     stem = os.path.splitext(os.path.basename(path))[0]
     out = []
-    for lock in glob.glob(os.path.join(d, f".~{stem}__*.twbr")):
+    for lock in glob.glob(os.path.join(glob.escape(d), f".~{glob.escape(stem)}__*.twbr")):
         try:
             r = subprocess.run(["lsof", "--", lock], capture_output=True,
                                text=True, timeout=15)

@@ -1819,3 +1819,10 @@ def test_a_field_does_not_mention_a_longer_name():
     </datasource></datasources></workbook>""")
     ED.drop_fields(root, ["Region"])
     assert [c.get("name") for c in root.iter("column")] == ["[Region Name]"]
+
+
+def test_rename_worksheet_refuses_a_taken_name():
+    root = _tree("<workbook><worksheets><worksheet name='A'/><worksheet name='B'/></worksheets></workbook>")
+    with pytest.raises(ValueError, match="already exists"):
+        ED.rename_worksheet(root, "A", "B")
+    assert [w.get("name") for w in root.iter("worksheet")] == ["A", "B"]

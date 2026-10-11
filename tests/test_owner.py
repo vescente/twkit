@@ -390,3 +390,16 @@ def test_install_refuses_when_the_source_changed(tmp_path):
     with pytest.raises(OW.Refused, match="changed since the build started"):
         OW.install(str(built), str(book), source_md5=md5_v1)
     assert book.read_bytes() == b"theirs v2"
+
+
+def test_lock_found_for_a_book_with_brackets_in_its_name(tmp_path, monkeypatch):
+    import subprocess as _sp
+
+    class _Held:
+        stdout = "COMMAND PID\nTableau 123"
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: _Held())
+    book = tmp_path / "Report [v2].twbx"
+    book.write_bytes(b"x")
+    (tmp_path / ".~Report [v2]__8251.twbr").write_bytes(b"")
+    assert OW.opened_in_tableau(str(book)).endswith("__8251.twbr")
