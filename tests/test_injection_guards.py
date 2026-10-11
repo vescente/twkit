@@ -276,3 +276,14 @@ def test_arithmetic_before_a_bracket_is_not_a_table_function():
 def test_a_call_off_the_list_is_still_refused_after_an_operator():
     with pytest.raises(PermissionError, match="not on the allowed list"):
         chsafe.read_only("SELECT 1 + 2 FROM t, generateSeries2(1, 5)")
+
+
+def test_a_bracket_after_from_inside_extract_is_a_scalar():
+    sql = ('SELECT EXTRACT(YEAR FROM "OrderDate") - EXTRACT(YEAR FROM (CAST("Ship" AS DATE))) '
+           '+ EXTRACT(YEAR FROM (DATE_TRUNC(\'year\', "Ship"))) FROM "Extract"."Extract"')
+    assert chsafe.read_only(sql) == sql
+
+
+def test_a_table_function_in_brackets_after_from_is_still_checked():
+    with pytest.raises(PermissionError, match="not on the allowed list"):
+        chsafe.read_only("SELECT * FROM (generateSeries2(1, 5))")

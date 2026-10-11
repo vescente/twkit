@@ -277,9 +277,12 @@ def _table_functions(code: str) -> list:
         prev = tok(k - 1)
         if t == "(":
             sub = tok(k + 1) in ("SELECT", "WITH")
+            # the bracket's position is judged where it stands, before it opens its own level:
+            # `EXTRACT(YEAR FROM (CAST(x AS DATE)))` is inside a call, not a FROM list
+            pos = not sub and table_pos(k, bracket=True)
             calls.append(not sub and k > 0 and _IDENT.fullmatch(toks[k - 1]) is not None
                          and prev not in _NOT_CALLS)
-            in_from.append(not sub and not calls[-1] and table_pos(k, bracket=True))
+            in_from.append(pos and not calls[-1])
             continue
         if t == ")":
             calls and calls.pop()
