@@ -605,10 +605,14 @@ def build_hyper_from_sql(sql: str, out_path: str, table: str = "Extract",
     import datetime as _dt
 
     def cast(v, kind):
-        if v is None or v == "":
+        # NULL arrives as None; an empty string is a value, as in the live query
+        if v is None or (v == "" and kind != "text"):
             return None
         if kind == "big_int":
-            return int(float(v))
+            try:
+                return int(v)
+            except ValueError:
+                return int(float(v))
         if kind == "double":
             return float(v)
         if kind == "bool":
@@ -687,8 +691,9 @@ def _sniff_csv_types(csv_path: str, sample: int = 2000,
     return header, kinds
 
 
-_TWB_TO_HYPER = {"string": "text", "date": "date", "datetime": "date",
-                 "real": "double", "integer": "big_int", "boolean": "text"}
+# for a CSV source: Tableau reads its dates without time and its booleans as text
+_CSV_TWB_TO_HYPER = {"string": "text", "date": "date", "datetime": "date",
+                     "real": "double", "integer": "big_int", "boolean": "text"}
 
 
 def declared_column_types(root) -> dict:
@@ -697,8 +702,8 @@ def declared_column_types(root) -> dict:
     for col in root.iter("column"):
         name = (col.get("name") or "").strip("[]")
         dt = (col.get("datatype") or "").strip().lower()
-        if name and dt in _TWB_TO_HYPER and not name.startswith("Calculation_"):
-            out.setdefault(name, _TWB_TO_HYPER[dt])
+        if name and dt in _CSV_TWB_TO_HYPER and not name.startswith("Calculation_"):
+            out.setdefault(name, _CSV_TWB_TO_HYPER[dt])
     return out
 
 

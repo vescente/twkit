@@ -2,6 +2,8 @@ import os
 import sys
 import zipfile
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mcp"))
 
 from twkit import extract as EX
@@ -181,3 +183,40 @@ def test_extract_sends_plain_sql_and_keeps_desktop_form(tmp_path, monkeypatch):
     assert seen == ["SELECT 1 WHERE a >= 1 AND b < 2"], seen
     rel = safexml.from_twbx(out).find(".//connection/relation[@type='text']")
     assert rel.text == "SELECT 1 WHERE a >>= 1 AND b << 2", "the SQL under the extract stays as Desktop wrote it"
+
+
+def test_tsv_unescape_is_one_pass():
+    from twkit.chclient import _unescape as u
+    assert u(r"C:\\new") == "C:\\new"            # a backslash, then the letter n
+    assert u(r"a\tb") == "a\tb" and u(r"O\'Brien") == "O'Brien" and u(r"x\0") == "x\0"
+    assert u(r"\N") is None and u("") == ""
+
+
+def test_workbook_types_keep_time_and_booleans(tmp_path):
+    twb = _TWB.replace("<column datatype='date' name='[Month]'",
+                       "<column datatype='datetime' name='[At]' role='dimension' type='ordinal' />"
+                       "<column datatype='boolean' name='[Vip]' role='dimension' type='nominal' />"
+                       "<column datatype='date' name='[Month]'")
+    p = tmp_path / "Types.twbx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("Book.twb", twb)
+    types = EX.workbook_column_types(str(p))
+    assert types["At"] == "timestamp" and types["Vip"] == "bool"
+
+
+def test_hyper_keeps_empty_text_and_exact_integers(tmp_path, monkeypatch):
+    pytest.importorskip("tableauhyperapi")
+    from tableauhyperapi import Connection, HyperProcess, Telemetry
+    from twkit import config
+
+    class _Stream:
+        def query_stream(self, sql, batch=50_000):
+            return (["id", "name"], ["Int64", "String"],
+                    iter([[["9007199254740993", ""], ["2", "Asia"], ["3", None]]]))
+
+    monkeypatch.setattr(config, "clickhouse", lambda *a, **k: _Stream())
+    out = str(tmp_path / "x.hyper")
+    EX.build_hyper_from_sql("SELECT 1", out)
+    with HyperProcess(Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hp, Connection(hp.endpoint, out) as c:
+        rows = c.execute_list_query('SELECT "id", "name" FROM "Extract"."Extract" ORDER BY "id"')
+    assert rows == [[2, "Asia"], [3, None], [9007199254740993, ""]]

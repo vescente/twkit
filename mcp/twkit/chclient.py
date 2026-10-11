@@ -6,14 +6,17 @@ import re
 DATA_HEADS = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXISTS", "WITH")
 
 
+_TSV_ESCAPES = {"b": "\b", "f": "\f", "r": "\r", "n": "\n", "t": "\t", "0": "\0",
+                "'": "'", "\\": "\\"}
+
+
 def _unescape(value: str):
-    """TSV escaping, as ClickHouse writes it."""
+    """TSV escaping, as ClickHouse writes it: one pass, so `\\\\n` stays a backslash and an `n`."""
     if value == "\\N":
         return None
     if "\\" not in value:
         return value
-    return (value.replace("\\t", "\t").replace("\\n", "\n")
-                 .replace("\\r", "\r").replace("\\\\", "\\"))
+    return re.sub(r"\\(.)", lambda m: _TSV_ESCAPES.get(m.group(1), m.group(1)), value)
 
 
 class HttpClickhouse:
