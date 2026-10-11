@@ -1809,3 +1809,13 @@ def test_add_case_branches_reads_keywords_in_any_case():
     r = ED.add_case_branches(root, ["_m"], {"b": "2"})
     assert r["branches_added"] == 1
     assert root.find(".//calculation").get("formula").endswith("WHEN 'b' THEN 2\nEND")
+
+
+def test_a_field_does_not_mention_a_longer_name():
+    assert not ED.mentions("[ds].[Region Name]", "Region")
+    assert ED.mentions("[ds].[Region]", "Region") and ED.mentions("[ds].[none:Region:nk]", "Region")
+    root = _tree("""<workbook><datasources><datasource name='ds'>
+      <column name='[Region]' datatype='string'/><column name='[Region Name]' datatype='string'/>
+    </datasource></datasources></workbook>""")
+    ED.drop_fields(root, ["Region"])
+    assert [c.get("name") for c in root.iter("column")] == ["[Region Name]"]

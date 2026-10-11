@@ -152,8 +152,10 @@ def mentions(s: str, field: str) -> bool:
     """Whether the string references exactly this field, not another with a similar name."""
     if not s:
         return False
-    return (f"[{field}]" in s or f":{field}:" in s or s == field
-            or f"[{field} " in s)
+    if f"[{field}]" in s or f":{field}:" in s or s == field:
+        return True
+    # the same column from another table of a join: `[campaign_id (Custom SQL Query1)]`
+    return re.search(r"\[" + re.escape(field) + r" \([^\[\]()]*\)\]", s) is not None
 
 
 def field_names(root, caption: str) -> set:
