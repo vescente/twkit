@@ -98,3 +98,25 @@ def test_logical_layer_created_when_missing():
     assert obj.get("caption") == "Segment flow"
     rel = obj.find("properties/relation")
     assert rel.get("type") == "text" and rel.text
+
+
+def test_columns_bound_to_logical_table():
+    root = _book()
+    _convert(root)
+    oid = root.find(".//object-graph/objects/object").get("id")
+    recs = list(root.iter("metadata-record"))
+    assert recs and all(r.findtext("object-id") == f"[{oid}]" for r in recs), \
+        "without object-id Tableau shows filter cards as Not available and drops sheets"
+    table = [c for c in root.iter("column") if c.get("datatype") == "table"]
+    assert [c.get("name") for c in table] == [f"[__tableau_internal_object_id__].[{oid}]"]
+
+
+def test_table_column_of_the_source_is_kept():
+    root = _book()
+    ds = root.find(".//datasource")
+    etree.SubElement(ds, "column", caption="Old Users", datatype="table",
+                     name="[__tableau_internal_object_id__].[_OLD]", role="measure",
+                     type="quantitative")
+    _convert(root)
+    names = {c.get("name") for c in ds.findall("column")}
+    assert "[__tableau_internal_object_id__].[_OLD]" in names

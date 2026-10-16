@@ -1939,8 +1939,8 @@ def register_chart_edit_tools(server) -> None:
         `measures`: comma-separated `measure-instance:PALETTE-NAME`, e.g.
         `sum:Δ %:qk:red_green_diverging_10_0, sum:P1:qk:Just black`. A diverging palette colors by
         sign (center set to zero); `Just black` keeps a constant color. List EVERY measure of the
-        sheet. `#...` colors are not accepted: only palette names work per measure. Puts
-        `[Multiple Values]` on Color instead of `[:Measure Names]` and enables separate legends.
+        sheet. Own colors: `#e7eff6` (constant) or `#f8e2e2>#dcefe0` (below zero > above zero).
+        Puts `[Multiple Values]` on Color instead of `[:Measure Names]` and enables separate legends.
         """
         try:
             spec = ED.parse_sign_color_spec(measures)
