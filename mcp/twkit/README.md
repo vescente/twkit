@@ -165,6 +165,13 @@ per-workbook script.
   name gives `Unknown field`; `edit_add_sheet` accepts both.
 - **Declaring a field does not place it.** `edit_add_measure` handles measure tables only;
   everything else uses `edit_place_field`.
+- **A measure table's column order can live on the sheet.** Desktop writes `<view><manual-sort>`
+  on `[:Measure Names]` when columns are dragged, and it overrides the data source's
+  `default-sorts`. `order_measures` edits the sheet's own order when there is one; `add_measure`
+  appends the new column to it.
+- **Technical columns are hidden, not dropped.** A column only calculations read (a sort key,
+  a row-kind flag) still shows in the data pane and in every Measure Names list;
+  `hide_fields` sets `hidden='true'` and refuses a field a view shows.
 - **Removing a dimension absent from the data** takes four steps: `list_dependent_calcs` →
   `edit_drop_fields` → `edit_drop_param_members` → `edit_drop_case_branches`.
 - **A filter that was set is not yet a filter.** A relative date filter can save, open and still not
