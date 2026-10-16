@@ -941,6 +941,17 @@ def register_edit_tools(server) -> None:
         return _json.dumps(got, ensure_ascii=False)
 
     @server.tool()
+    def edit_hide_fields(fields: str, hidden: bool = True) -> str:
+        """Hide fields (comma-separated) from the data pane and the Measure Names lists.
+
+        Calculations keep using them. A field a view shows (shelf, filter, mark) is refused.
+        `hidden=False` shows them again.
+        """
+        got = ED.hide_fields(get_editor().root, [f.strip() for f in fields.split(",") if f.strip()],
+                             hidden)
+        return _json.dumps(got, ensure_ascii=False)
+
+    @server.tool()
     def edit_clone_dashboard(source: str, name: str, sheet_map_json: str,
                              with_button: bool = True) -> str:
         """Copy a dashboard, remapping its sheets.

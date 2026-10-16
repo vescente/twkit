@@ -741,6 +741,39 @@ def test_column_order_otherwise_tableau_sorts_alphabetically():
     assert len(root.findall(".//datasource/default-sorts")) == 1, "one order per datasource"
 
 
+def _sheet_sorted_measure_book():
+    root = _measure_book()
+    view = root.find(".//worksheet/table/view")
+    ms = etree.SubElement(view, "manual-sort", column="[ds].[:Measure Names]", direction="ASC")
+    etree.SubElement(etree.SubElement(ms, "dictionary"), "bucket").text = '"[ds].[sum:GGR:qk]"'
+    return root
+
+
+def test_hidden_field_stays_usable_and_shown_one_is_refused():
+    root = _measure_book()
+    got = ED.hide_fields(root, ["Bets total", "GGR", "Nope"])
+    assert got["hidden"] == ["Bets total"]
+    assert got["refused_placed"] == ["GGR"], "a column of the measure table is shown"
+    assert got["not_found"] == ["Nope"]
+    ds = root.find(".//datasources/datasource")
+    hidden = {c.get("name") for c in ds.findall("column") if c.get("hidden") == "true"}
+    assert hidden == {"[Bets total]"}
+    ED.hide_fields(root, ["Bets total"], hidden=False)
+    assert not [c for c in ds.findall("column") if c.get("hidden")]
+
+
+def test_sheet_own_column_order_is_the_one_changed():
+    root = _sheet_sorted_measure_book()
+    ED.add_measure(root, "Provider indicators", "Margin %", "User")
+    view_buckets = [b.text for b in root.find(".//worksheet/table/view/manual-sort").iter("bucket")]
+    assert view_buckets == ['"[ds].[sum:GGR:qk]"', '"[ds].[usr:Margin:qk]"'], "a new column goes last"
+    got = ED.order_measures(root, "Provider indicators", ["Margin %", "GGR"], ["User", "Sum"])
+    assert got["stored_on"] == "sheet"
+    view_buckets = [b.text for b in root.find(".//worksheet/table/view/manual-sort").iter("bucket")]
+    assert view_buckets == ['"[ds].[usr:Margin:qk]"', '"[ds].[sum:GGR:qk]"']
+    assert root.find(".//datasource/default-sorts") is None, "the sheet order overrides the source order"
+
+
 def _page_book():
     return _tree("""<workbook><datasources><datasource name='ds'>
         <column name='[Provider]' datatype='string' role='dimension'/>

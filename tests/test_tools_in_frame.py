@@ -95,6 +95,7 @@ NOT_IN_FRAME = {
     "edit_fit_to_extract": "data source mapping",
     "edit_to_live_sql": "connection",
     "edit_drop_fields": "fields no sheet uses",
+    "edit_hide_fields": "data pane and Measure Names lists, not the page",
     "edit_rename_fields": "internal names; the page shows captions (set_caption)",
     "edit_repair_dashboards": "repair: viewpoints, zone ids, repeated shelf fields",
     "edit_repair_node_order": "repair: node order",

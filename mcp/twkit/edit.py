@@ -178,6 +178,41 @@ def rebuild_shelf(tokens: list) -> str:
     return out
 
 
+def hide_fields(root, fields: list, hidden: bool = True) -> dict:
+    """Hide fields from the data pane and from Measure Names lists; calculations still use them.
+
+    A field placed on a shelf, a filter or a mark is refused: Tableau does not hide a field a
+    view shows.
+    """
+    placed = set()
+    for ws in root.iter("worksheet"):
+        texts = [(s.text or "") for tag in ("rows", "cols") for s in ws.iter(tag)]
+        texts += [el.get("column") or "" for el in ws.iter("filter", "text", "color", "size",
+                                                             "tooltip", "lod", "shape")]
+        texts += [g.get("member") or "" for g in ws.iter("groupfilter")]
+        for f in fields:
+            if any(mentions(t, f) for t in texts):
+                placed.add(f)
+    done, missing = [], []
+    for f in fields:
+        if f in placed:
+            continue
+        cols = [c for ds in root.findall("./datasources/datasource") if ds.get("name") != "Parameters"
+                for c in ds.findall("column")
+                if f in ((c.get("name") or "").strip("[]"), c.get("caption"))]
+        if not cols:
+            missing.append(f)
+            continue
+        for c in cols:
+            if hidden:
+                c.set("hidden", "true")
+            else:
+                c.attrib.pop("hidden", None)
+        done.append(f)
+    return {"hidden" if hidden else "shown": done, "refused_placed": sorted(placed),
+            "not_found": missing}
+
+
 def drop_fields(root, fields: list, keep_on_shelves: str = "") -> dict:
     """Remove fields from the workbook together with ALL references."""
     killed = replaced = 0
@@ -2657,8 +2692,23 @@ def add_measure(root, sheet: str, column: str, derivation: str = "Sum") -> dict:
         g.set("function", "member")
         g.set("level", "[:Measure Names]")
         g.set("member", member)
+        own = _sheet_measure_sort(ws, ds)
+        if own is not None:
+            etree.SubElement(own.find("dictionary"), "bucket").text = member
         return {"added": 1, "measure": ref}
     raise ValueError("the sheet has no [:Measure Names] filter; it is not a measure table")
+
+
+def _sheet_measure_sort(ws, ds: str):
+    """The sheet's own column order (`<view><manual-sort>`); it overrides the data source's."""
+    view = ws.find("table/view")
+    if view is None:
+        return None
+    own = next((m for m in view.findall("manual-sort")
+                if m.get("column") == f"[{ds}].[:Measure Names]"), None)
+    if own is not None and own.find("dictionary") is None:
+        etree.SubElement(own, "dictionary")
+    return own
 
 
 def order_measures(root, sheet: str, columns: list, derivations: list = None) -> dict:
@@ -2669,6 +2719,15 @@ def order_measures(root, sheet: str, columns: list, derivations: list = None) ->
     ds = _ds_name(ws)
     derivations = derivations or ["Sum"] * len(columns)
     refs = [_instance_ref(root, ws, c, d)[0] for c, d in zip(columns, derivations)]
+
+    own = _sheet_measure_sort(ws, ds)
+    if own is not None:
+        dic = own.find("dictionary")
+        for b in list(dic):
+            dic.remove(b)
+        for r in refs:
+            etree.SubElement(dic, "bucket").text = f'"{r}"'
+        return {"ordered_column_count": len(refs), "order": refs, "stored_on": "sheet"}
 
     for datasource in root.findall("./datasources/datasource"):
         if datasource.get("name") != ds:
