@@ -1127,6 +1127,39 @@ def r42_caption_collision(b) -> list:
     return out
 
 
+def r43_logical_table_column(b) -> list:
+    """Symptom: filter cards say "Not available", a sheet on a text field is dropped on load.
+
+    Each logical table of the object graph has its own `[__tableau_internal_object_id__]`
+    column, and column records point only at objects the graph has.
+    """
+    out = []
+    for ds in b.root.iter("datasource"):
+        parent = ds.getparent()
+        if ds.get("name") == "Parameters" or parent is None or parent.tag != "datasources":
+            continue
+        objs = [o.get("id") for o in ds.findall("./object-graph/objects/object") if o.get("id")]
+        if not objs:
+            continue
+        where = f"data source {ds.get('caption') or ds.get('name')}"
+        tables = {c.get("name") for c in ds.findall("column") if c.get("datatype") == "table"}
+        missing = [o for o in objs if f"[__tableau_internal_object_id__].[{o}]" not in tables]
+        if missing:
+            out.append(Violation(
+                "R43", ERROR, f"logical table without its table column: {', '.join(missing[:3])}",
+                where=where, fix="declare [__tableau_internal_object_id__].[<object id>] "
+                                 "(datatype table), as Desktop writes it"))
+        known = {f"[{o}]" for o in objs}
+        stray = sorted({r.findtext("local-name") for r in ds.iter("metadata-record")
+                        if r.findtext("object-id") not in (None, *known)})
+        if stray:
+            out.append(Violation(
+                "R43", ERROR, f"{len(stray)} columns point at an object the graph lacks "
+                              f"({', '.join(stray[:3])})", where=where,
+                fix="set <object-id> of each record to an object of the graph"))
+    return out
+
+
 RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r05_measure_names, r06_mysql_connection, r07_extract_packed,
          r08_extension, r10_xsd,
@@ -1139,7 +1172,8 @@ RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r33_opens_on_worksheet, r34_double_aggregation,
          r35_naming_and_folders, r36_device_layout_drift, r40_ds_style_encoding,
          r37_gradient_on_plain_measure, r38_label_color_overridden,
-         r41_param_ref_by_caption, r42_caption_collision, r_format_attr]
+         r41_param_ref_by_caption, r42_caption_collision, r43_logical_table_column,
+         r_format_attr]
 
 
 def lint(path: str, db: str = "", table: str = "") -> list[Violation]:

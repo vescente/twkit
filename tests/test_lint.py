@@ -559,3 +559,27 @@ def test_r42_ignores_the_table_object_named_like_a_field():
            "</datasource></datasources></workbook>")
     root = safexml.from_bytes(xml.encode())
     assert r42_caption_collision(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False)) == []
+
+
+def _graph_book(table_col: bool, record_oid: str = "[_A1]"):
+    from twkit.lint import Book
+    from twkit import safexml
+    col = ("<column caption='Data' datatype='table' name='[__tableau_internal_object_id__].[_A1]' "
+           "role='measure' type='quantitative'/>" if table_col else "")
+    xml = ("<workbook><datasources><datasource name='ds' caption='Data'>"
+           "<connection class='federated'><metadata-records><metadata-record class='column'>"
+           f"<local-name>[user_group]</local-name><object-id>{record_oid}</object-id>"
+           "</metadata-record></metadata-records></connection>"
+           f"{col}<object-graph><objects><object caption='Data' id='_A1'/></objects></object-graph>"
+           "</datasource></datasources></workbook>")
+    root = safexml.from_bytes(xml.encode())
+    return Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False)
+
+
+def test_r43_logical_table_needs_its_table_column():
+    from twkit.lint import r43_logical_table_column
+    assert r43_logical_table_column(_graph_book(True)) == []
+    v = r43_logical_table_column(_graph_book(False))
+    assert len(v) == 1 and v[0].severity == ERROR and "_A1" in v[0].message
+    v = r43_logical_table_column(_graph_book(True, "[_GONE]"))
+    assert len(v) == 1 and "[user_group]" in v[0].message

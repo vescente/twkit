@@ -1317,7 +1317,7 @@ def sync_column_decls(ds, columns: list) -> dict:
     for col in list(ds.findall("column")):
         if col.find("calculation") is not None or col.get("param-domain-type"):
             continue
-        if (col.get("name") or "").startswith("[:"):
+        if (col.get("name") or "").startswith(("[:", f"[{TABLE_COLUMN_PREFIX}]")):
             continue
         nm = (col.get("name") or "").strip("[]")
         if nm in want:
@@ -1344,6 +1344,34 @@ def _desktop_sql(sql: str) -> str:
     """Custom SQL in the form Desktop writes (`<` and `>` doubled)."""
     from .dryrun import escape_sql
     return escape_sql(sql)
+
+
+TABLE_COLUMN_PREFIX = "__tableau_internal_object_id__"
+
+
+def _bind_to_object(ds, recs) -> None:
+    """Tie the columns to the logical table, as Desktop writes it.
+
+    Without `<object-id>` on each record and the table's own `[__tableau_internal_object_id__]`
+    column, Tableau draws the view but cannot resolve the fields by name: filter cards show
+    "Not available" and a sheet built on such a field is dropped on load.
+    """
+    obj = ds.find("./object-graph/objects/object")
+    if obj is None or not obj.get("id"):
+        return
+    oid = obj.get("id")
+    for rec in recs.findall("metadata-record"):
+        for old in rec.findall("object-id"):
+            rec.remove(old)
+        etree.SubElement(rec, "object-id").text = f"[{oid}]"
+    name = f"[{TABLE_COLUMN_PREFIX}].[{oid}]"
+    if not any(c.get("name") == name for c in ds.findall("column")):
+        col = etree.Element("column")
+        for key, val in (("caption", obj.get("caption") or ds.get("caption") or ""),
+                         ("datatype", "table"), ("name", name), ("role", "measure"),
+                         ("type", "quantitative")):
+            col.set(key, val)
+        insert_in_order(ds, col, _DS_ORDER)
 
 
 def _sync_object_graph(ds, cname: str, relation_name: str, sql: str) -> int:
@@ -1492,6 +1520,7 @@ def to_live_sql(root, sql: str, columns: list, *, server: str, port: str,
 
         decls = sync_column_decls(ds, columns)
         graphs += _sync_object_graph(ds, cname, relation_name, sql)
+        _bind_to_object(ds, recs)
 
         for ex in ds.findall("extract"):
             ds.remove(ex)
@@ -3160,13 +3189,18 @@ def copy_color_encoding(root, donor: str, sheets: list) -> dict:
     return {"moved": len(done), "donor": donor, "encodings_per_sheet": sorted(set(done.values()))}
 
 
+_HEX_SPEC = re.compile(r"#[0-9a-fA-F]{6}(>#[0-9a-fA-F]{6})?")
+
+
 def sign_color(root, sheets: list, measures: dict) -> dict:
     """Text color in a measure table BY THE SIGN of the value, with its own scale per measure."""
     bad = {k: v for k, v in measures.items()
-           if not isinstance(v, str) or not v.strip() or v.strip().startswith("#")}
+           if not isinstance(v, str) or not v.strip()
+           or (v.strip().startswith("#") and not _HEX_SPEC.fullmatch(v.strip()))}
     if bad:
-        raise ValueError(f"sign_color expects a palette NAME per measure, not a color: {bad}. "
-                         "Example: red_green_diverging_10_0 (by sign), Just black (constant)")
+        raise ValueError(f"sign_color expects a palette name, `#hex` or `#neg>#pos` per measure: "
+                         f"{bad}. Example: red_green_diverging_10_0, Just black, #e7eff6, "
+                         "#f8e2e2>#dcefe0")
     done = {}
     want = set(sheets)
     for ws in root.iter("worksheet"):
@@ -3215,10 +3249,27 @@ def sign_color(root, sheets: list, measures: dict) -> dict:
             e = etree.SubElement(rule, "encoding")
             e.set("attr", "color")
             e.set("field", f"[{ds}].[{name}]")
-            e.set("type", "interpolated")
-            e.set("palette", spec.strip())
-            if spec.strip() in DIVERGING_PALETTES:
-                e.set("center", "0")
+            spec = spec.strip()
+            if spec.startswith("#"):
+                tones = spec.split(">")
+                e.set("include-totals", "true")
+                e.set("type", "custom-interpolated")
+                pal = etree.SubElement(e, "color-palette")
+                pal.set("custom", "true"); pal.set("name", "")
+                if len(tones) == 2:
+                    e.set("center", "0")
+                    e.set("num-steps", "2")
+                    pal.set("type", "ordered-diverging")
+                else:
+                    pal.set("type", "ordered-sequential")
+                    tones = tones * 2
+                for tone in tones:
+                    etree.SubElement(pal, "color").text = tone
+            else:
+                e.set("type", "interpolated")
+                e.set("palette", spec)
+                if spec in DIVERGING_PALETTES:
+                    e.set("center", "0")
             made += 1
         done[ws.get("name")] = made
     return done
@@ -3232,9 +3283,8 @@ def parse_sign_color_spec(text: str) -> dict:
         if not item:
             continue
         name, sep, palette = item.rpartition(":")
-        if palette.strip().startswith("#"):
-            raise ValueError(f"'{item}': a color instead of a palette name; at measure level "
-                             "only a name works (red_green_diverging_10_0, Just black)")
+        if palette.strip().startswith("#") and not _HEX_SPEC.fullmatch(palette.strip()):
+            raise ValueError(f"'{item}': a color is `#rrggbb` or `#below>#above`")
         if not sep or not name.strip() or not palette.strip():
             raise ValueError(f"'{item}': expected `column:palette`, "
                              "for example sum:profit:qk:red_green_diverging_10_0")

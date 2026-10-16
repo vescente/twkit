@@ -80,15 +80,29 @@ def test_edit_sign_color_color_instead_of_palette_refused_without_edit(wb, monke
     e = _measure_table(wb)
     before = etree.tostring(e.root)
     tool = _mcp_tool(monkeypatch, "register_chart_edit_tools", "edit_sign_color", e)
-    out = json.loads(tool("S", "sum:profit:qk:#e15759:#59a14f"))
-    assert out["applied"] == 0 and "palette name" in out["why"]
+    out = json.loads(tool("S", "sum:profit:qk:#e1575"))
+    assert out["applied"] == 0 and "#rrggbb" in out["why"]
     assert etree.tostring(e.root) == before
 
 
 def test_sign_color_color_pair_raises_valueerror(wb):
     e = _measure_table(wb)
-    with pytest.raises(ValueError, match="palette NAME"):
+    with pytest.raises(ValueError, match="palette name"):
         ED.sign_color(e.root, ["S"], {"sum:profit:qk": ("#e15759", "#59a14f")})
+
+
+def test_sign_color_own_colors_become_custom_palettes(wb):
+    e = _measure_table(wb)
+    ED.sign_color(e.root, ["S"], {"sum:profit:qk": "#f8e2e2>#dcefe0", "sum:sales:qk": "#e7eff6"})
+    encs = {en.get("field").rsplit(".", 1)[-1]: en
+            for en in _ws(e, "S").iter("encoding") if en.get("attr") == "color"}
+    by_sign, flat = encs["[sum:profit:qk]"], encs["[sum:sales:qk]"]
+    assert by_sign.get("type") == "custom-interpolated" and by_sign.get("center") == "0"
+    assert by_sign.get("num-steps") == "2" and by_sign.get("include-totals") == "true"
+    tones = [c.text for c in by_sign.iter("color")]
+    assert tones[0] == "#f8e2e2" and tones[-1] == "#dcefe0", "the ends are the two buckets"
+    assert {c.text for c in flat.iter("color")} == {"#e7eff6"}
+    assert by_sign.find("color-palette").get("name") == "", "a named palette is looked up in Preferences.tps"
 
 
 def test_spec_parse_palette_last_segment():
