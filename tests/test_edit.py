@@ -2115,3 +2115,83 @@ def test_hide_headers_axis_for_measure_values_label_for_measure_names():
     label = tip.find(".//style-rule[@element='label']/format")
     assert label.get("field") == "[ds].[:Measure Names]" and label.get("class") is None
     assert len([f for f in tip.iter("format") if f.get("field") == "[ds].[none:b:nk]"]) == 0
+
+
+_SPLIT = """<workbook><datasources>
+  <datasource name='Parameters'><column name='[Parameter 1]' caption='Start'
+    default-value-field='[A].[c5]'/></datasource>
+  <datasource name='A' caption='Main'><connection class='federated'/>
+    <column name='[x]' datatype='string'/>
+    <column name='[c1]' caption='One'><calculation class='tableau' formula='SUM([x])'/></column>
+    <column name='[c2]' caption='Two'><calculation class='tableau' formula='[c3] * 2'/></column>
+    <column name='[c3]' caption='Three'><calculation class='tableau' formula='SUM([x])'/></column>
+    <column name='[c4]' caption='Four'><calculation class='tableau' formula='1'/></column>
+    <column name='[c5]' caption='Five'><calculation class='tableau' formula='TODAY()'/></column>
+    <folders-common><folder name='F'><folder-item name='[c2]' type='field'/>
+      <folder-item name='[c4]' type='field'/></folder></folders-common>
+  </datasource></datasources>
+  <worksheets>
+    <worksheet name='S1'><table><view><datasources><datasource name='A'/></datasources>
+      <datasource-dependencies datasource='A'><column name='[c1]'/></datasource-dependencies></view>
+      <rows>[A].[usr:c1:qk]</rows></table></worksheet>
+    <worksheet name='S2'><table><view><datasources><datasource name='A'/></datasources>
+      <datasource-dependencies datasource='A'><column name='[c2]'/></datasource-dependencies>
+      <filter class='categorical' column='[A].[none:x:nk]'/></view>
+      <rows>[A].[usr:c2:qk]</rows></table></worksheet>
+  </worksheets>
+  <dashboards><dashboard name='D'><zones><zone name='S2' param='[A].[none:x:nk]' type-v2='filter'/>
+    <zone name='S1' param='[A].[none:x:nk]' type-v2='filter'/></zones></dashboard></dashboards>
+  <windows><window class='worksheet' name='S2'><cards><card param='[A].[none:x:nk]' type='filter'/>
+    </cards></window></windows></workbook>"""
+
+
+def test_split_source_moves_sheets_and_keeps_only_used_calcs():
+    root = etree.fromstring(_SPLIT)
+    r = ED.split_source(root, ["S2"], "Plan")
+    new = r["source"]
+    s2 = etree.tostring(root.find(".//worksheet[@name='S2']"), encoding="unicode")
+    assert "[A]" not in s2 and "'A'" not in s2.replace('"', "'") and f"[{new}]" in s2
+    zones = {z.get("name"): z.get("param") for z in root.iter("zone")}
+    assert zones == {"S2": f"[{new}].[none:x:nk]", "S1": "[A].[none:x:nk]"}
+    assert root.find(".//window/cards/card").get("param") == f"[{new}].[none:x:nk]"
+    calcs = {d.get("name"): sorted(c.get("name") for c in d.findall("column")
+                                   if c.find("calculation") is not None)
+             for d in root.findall("datasources/datasource") if d.get("name") != "Parameters"}
+    assert calcs == {"A": ["[c1]", "[c4]", "[c5]"], new: ["[c2]", "[c3]"]}, calcs
+    items = {d.get("name"): [i.get("name") for i in d.iter("folder-item")]
+             for d in root.findall("datasources/datasource") if d.get("name") != "Parameters"}
+    assert items == {"A": ["[c4]"], new: ["[c2]"]}
+    assert root.find(f".//datasource[@name='{new}']").get("caption") == "Plan"
+    with pytest.raises(ValueError, match="already exists"):
+        ED.split_source(root, ["S1"], "Plan")
+
+
+def test_orphan_check_is_scoped_to_the_formula_source():
+    from twkit.extract import orphan_formula_refs
+    root = etree.fromstring("""<workbook><datasources>
+      <datasource name='A' caption='Main'><column name='[user_id]'/>
+        <column name='[c1]' caption='Players'><calculation class='tableau'
+          formula="COUNTD(IF [metric] = '' THEN [user_id] END)"/></column></datasource>
+      <datasource name='B' caption='Plan'><column name='[metric]'/>
+        <column name='[c2]' caption='Ok'><calculation class='tableau' formula="MAX([metric])"/></column>
+      </datasource></datasources>
+      <worksheets><worksheet name='S'><rows>[A].[usr:c1:qk]</rows></worksheet></worksheets></workbook>""")
+    assert orphan_formula_refs(root) == {"blocking": {"Players": ["metric"]}, "idle": {}}
+    assert orphan_formula_refs(root, "Plan") == {"blocking": {}, "idle": {}}
+    assert orphan_formula_refs(root, "Main")["blocking"] == {"Players": ["metric"]}
+
+
+def test_shared_filter_groups_start_at_three_and_old_ones_move_up():
+    root = etree.fromstring(_SPLIT.replace(
+        "<filter class='categorical' column='[A].[none:x:nk]'/>",
+        "<filter class='categorical' column='[A].[none:x:nk]'><groupfilter function='level-members' "
+        "level='[none:x:nk]'/></filter>"))
+    r = ED.share_filters(root, "S2", ["S1"], ["x"])
+    assert r["shared"], r
+    groups = {f.get("filter-group") for f in root.iter("filter")}
+    assert groups == {"3"}, groups
+    for f in root.iter("filter"):
+        f.set("filter-group", "2")
+    assert ED.renumber_filter_groups(root) == {"2": "3"}
+    assert {f.get("filter-group") for f in root.iter("filter")} == {"3"}
+    assert ED.renumber_filter_groups(root) == {}

@@ -175,3 +175,18 @@ def test_dimension_sorted_by_itself_desc_flips_inside_outer_member():
     got = nest_self_order(ws, rows, 2, ["[none:g:nk]", "[none:d:ok]"])
     assert [r[2] for r in got] == [2, 1, 4, 3]
     assert nest_self_order(ws, rows, 2, ["[none:g:nk]", "[none:x:ok]"]) == rows
+
+
+def test_card_keeping_every_member_reads_all():
+    ws = etree.fromstring(
+        "<worksheet><table><view><filter class='categorical' column='[ds].[none:m:nk]'>"
+        "<groupfilter function='union'><groupfilter function='member' level='[none:m:nk]' member='\"a\"'/>"
+        "<groupfilter function='member' level='[none:m:nk]' member='\"b\"'/></groupfilter></filter>"
+        "</view></table></worksheet>")
+    FR._DOMAINS.clear()
+    assert FR._filter_state(ws, "[ds].[none:m:nk]") == "(Multiple values)"
+    FR._DOMAINS[("ds", "m")] = 2
+    assert FR._filter_state(ws, "[ds].[none:m:nk]") == "(All)"
+    FR._DOMAINS[("ds", "m")] = 3
+    assert FR._filter_state(ws, "[ds].[none:m:nk]") == "(Multiple values)"
+    FR._DOMAINS.clear()

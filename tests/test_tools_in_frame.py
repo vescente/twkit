@@ -105,6 +105,7 @@ VISIBLE = [
 NOT_IN_FRAME = {
     "edit_folder_canon": "data pane folders",
     "edit_viz_in_tooltip": "acts on hover; the tooltip sheet is drawn on its own",
+    "edit_split_source": "moves sheets to a copy of their source; the page draws the same",
     "edit_fit_to_extract": "data source mapping",
     "edit_to_live_sql": "connection",
     "edit_drop_fields": "fields no sheet uses",

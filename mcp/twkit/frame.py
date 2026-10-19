@@ -100,6 +100,7 @@ def _num(v):
 
 _SEP = {"group": ","}
 _MARK = {"color": BAR}
+_DOMAINS: dict = {}   # (datasource, column) -> member count, set per publish
 
 
 def mark_color(ws) -> str:
@@ -1360,8 +1361,34 @@ def _filter_state(ws, param: str, root=None) -> str:
         if len(mem) == 1:
             return (mem[0] or "").strip('"')
         if len(mem) > 1:
+            col = _instance_col(inst)
+            if _DOMAINS.get((source, col)) == len(set(mem)):
+                return "(All)"
             return "(Multiple values)"
     return "(All)"
+
+
+def _instance_col(inst: str) -> str:
+    parts = inst.strip("[]").split(":")
+    return parts[1] if len(parts) >= 3 else inst.strip("[]")
+
+
+def card_domains(path: str, root) -> dict:
+    """Member counts of the columns behind enumerated filter cards (see `member_counts`)."""
+    refs = []
+    for z in root.iter("zone"):
+        if z.get("type-v2") != "filter" or not z.get("param"):
+            continue
+        r = re.findall(r"\[[^\]]+\]", z.get("param"))
+        if len(r) > 1 and not r[-1].startswith("[:"):
+            refs.append((r[0].strip("[]"), _instance_col(r[-1])))
+    if not refs:
+        return {}
+    from .dryrun import member_counts
+    try:
+        return member_counts(path, refs)
+    except Exception:                                         # noqa: BLE001
+        return {}
 
 
 def _subst(pval: dict, sheet: str, d: dict | None, ws):
@@ -3854,6 +3881,8 @@ def publish(path: str, out_dir: str = "", limit: int = 300, default_locale: str 
     else:
         note = ""
     assets = _extract_images(path, root, dst)
+    _DOMAINS.clear()
+    _DOMAINS.update(card_domains(path, root))
     try:
         from .dryrun import dynamic_param_values
         dyn = dynamic_param_values(path)

@@ -277,3 +277,19 @@ def test_range_top_and_relative_filters_land_in_slices():
     sl = [c.text for c in view.findall("slices/column")]
     assert sorted(sl) == sorted(f.get("column") for f in view.findall("filter")), sl
     assert len(sl) == len(set(sl)) == 3
+
+
+def test_apply_filter_takes_the_instance_the_page_card_uses():
+    root = _root()
+    ED.apply_filter(root, ["Sheet"], "level")
+    assert _filters(root)[0].get("column") == "[federated.x].[none:level:nk]"
+    root = _root()
+    root.find(".//datasource/column[@name='[level]']").set("type", "ordinal")
+    ED.apply_filter(root, ["Sheet"], "level")
+    assert _filters(root)[0].get("column") == "[federated.x].[none:level:ok]"
+    root = _root()
+    root.append(etree.fromstring("<dashboards><dashboard name='D'><zones>"
+                                 "<zone param='[federated.x].[none:brand:ok]' type-v2='filter'/>"
+                                 "</zones></dashboard></dashboards>"))
+    ED.apply_filter(root, ["Sheet"], "brand")
+    assert _filters(root)[0].get("column") == "[federated.x].[none:brand:ok]"

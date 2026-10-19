@@ -616,3 +616,40 @@ def test_r12_viz_in_tooltip_sheet_is_not_orphan():
     root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
     v = r12_orphan_sheets(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False))
     assert len(v) == 1 and "(Lost)" in v[0].message, v
+
+
+def test_r45_reserved_filter_group():
+    from lxml import etree
+
+    from twkit import safexml
+    from twkit.lint import Book, r45_reserved_filter_group
+
+    def run(g):
+        xml = (f"<workbook><worksheets><worksheet name='D'><table><view>"
+               f"<filter class='categorical' column='[ds].[none:partner_id:ok]' filter-group='{g}'/>"
+               f"</view></table></worksheet></worksheets></workbook>")
+        root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
+        return r45_reserved_filter_group(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False))
+    v = run(2)
+    assert len(v) == 1 and v[0].rule == "R45" and "partner_id" in v[0].message
+    assert run(3) == []
+
+
+def test_r46_card_on_another_instance_than_the_sheet_filter():
+    from lxml import etree
+
+    from twkit import safexml
+    from twkit.lint import Book, r46_card_instance_mismatch
+
+    def run(sheet_kind):
+        xml = (f"<workbook><worksheets><worksheet name='D'><table><view>"
+               f"<filter class='categorical' column='[ds].[none:partner_id:{sheet_kind}]'/>"
+               f"</view></table></worksheet></worksheets><dashboards><dashboard name='P'><zones>"
+               f"<zone name='D' param='[ds].[none:partner_id:ok]' type-v2='filter'/>"
+               f"<zone name='D' param='[ds].[none:user_id:ok]' type-v2='filter'/>"
+               f"</zones></dashboard></dashboards></workbook>")
+        root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
+        return r46_card_instance_mismatch(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False))
+    v = run("nk")
+    assert len(v) == 1 and "card [none:partner_id:ok], sheet [none:partner_id:nk]" in v[0].message
+    assert run("ok") == []

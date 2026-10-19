@@ -1278,6 +1278,138 @@ def _copy_deps(src_ws, dst_ws, refs: list) -> None:
             ddep.append(copy.deepcopy(ci))
 
 
+def _rebind(el, old: str, new: str) -> int:
+    """Every reference to data source `old` inside `el` now points to `new`."""
+    n = 0
+    for e in el.iter():
+        if not isinstance(e.tag, str):
+            continue
+        for k, v in e.attrib.items():
+            if v == old:
+                e.set(k, new)
+                n += 1
+            elif f"[{old}]" in v:
+                e.set(k, v.replace(f"[{old}]", f"[{new}]"))
+                n += 1
+        if e.text and f"[{old}]" in e.text:
+            e.text = e.text.replace(f"[{old}]", f"[{new}]")
+            n += 1
+    return n
+
+
+def used_calcs(root, ds_name: str) -> set:
+    """Calculations of a source that something uses: a sheet, a page card, a parameter bound to a
+    field, or another used calculation."""
+    ds = next((d for d in root.findall("datasources/datasource") if d.get("name") == ds_name), None)
+    if ds is None:
+        return set()
+    calcs = {(c.get("name") or "").strip("[]"): c.find("calculation").get("formula") or ""
+             for c in ds.findall("column") if c.find("calculation") is not None}
+    used = set()
+    for dep in root.iter("datasource-dependencies"):
+        if dep.get("datasource") == ds_name and not any(
+                a.tag == "datasource" for a in dep.iterancestors()):
+            used |= {(c.get("name") or "").strip("[]") for c in dep.findall("column")}
+            used |= {(c.get("column") or "").strip("[]") for c in dep.findall("column-instance")}
+    pref = f"[{ds_name}].["
+    for e in root.iter():
+        if not isinstance(e.tag, str) or any(a is ds for a in e.iterancestors()):
+            continue
+        for v in e.attrib.values():
+            for m in re.finditer(re.escape(pref) + r"([^\]]+)\]", v):
+                used.add(_instance_column(f"[x].[{m.group(1)}]"))
+    todo = [u for u in used if u in calcs]
+    while todo:
+        for ref in re.findall(r"\[([^\[\]]+)\]", calcs[todo.pop()]):
+            if ref in calcs and ref not in used:
+                used.add(ref)
+                todo.append(ref)
+    return used & set(calcs)
+
+
+def prune_source(root, ds_name: str, among: set | None = None) -> list:
+    """Drop the calculations of one source that nothing uses (see `used_calcs`); with `among`,
+    only those of them (an owner's unused calculation may be work in progress)."""
+    ds = next((d for d in root.findall("datasources/datasource") if d.get("name") == ds_name), None)
+    if ds is None:
+        return []
+    keep = used_calcs(root, ds_name)
+    drop = [(c.get("name") or "").strip("[]") for c in ds.findall("column")
+            if c.find("calculation") is not None and (c.get("name") or "").strip("[]") not in keep
+            and (among is None or (c.get("name") or "").strip("[]") in among)]
+    if drop:
+        drop_fields(ds, drop)
+    return drop
+
+
+def split_source(root, sheets: list, caption: str) -> dict:
+    """Move sheets to a COPY of their data source, so each source can carry its own SQL
+    (edit_to_live_sql with datasource=caption). The copy keeps only what the moved sheets use; the
+    original loses only what only they used, its other unused calculations stay."""
+    wss = [_sheet(root, s) for s in sheets]
+    missing = [s for s, w in zip(sheets, wss) if w is None]
+    if missing:
+        raise ValueError(f"no sheets {missing} in the workbook")
+    olds = {_ds_name(w) for w in wss}
+    if len(olds) != 1:
+        raise ValueError(f"the sheets sit on different sources: {sorted(olds)}")
+    old = olds.pop()
+    src = next(d for d in root.findall("datasources/datasource") if d.get("name") == old)
+    if any((d.get("caption") or d.get("name")) == caption for d in root.findall("datasources/datasource")):
+        raise ValueError(f"a source named {caption!r} already exists")
+    new = "federated." + uuid.uuid4().hex[:28]
+    used_before = used_calcs(root, old)
+    dst = copy.deepcopy(src)
+    dst.set("name", new)
+    dst.set("caption", caption)
+    src.addnext(dst)
+
+    moved = set(sheets)
+    for w in wss:
+        _rebind(w, old, new)
+    for win in root.iter("window"):
+        if win.get("name") in moved:
+            _rebind(win, old, new)
+    for dash in root.iter("dashboard"):
+        for z in dash.iter("zone"):
+            if z.get("name") in moved and f"[{old}]" in (z.get("param") or ""):
+                z.set("param", z.get("param").replace(f"[{old}]", f"[{new}]"))
+    groups = {f.get("filter-group") for w in wss for f in w.iter("filter") if f.get("filter-group")}
+    crossing = sorted({w.get("name") for w in root.iter("worksheet")
+                       if w.get("name") not in moved
+                       and any(f.get("filter-group") in groups for f in w.iter("filter"))})
+    dropped_new = prune_source(root, new)
+    dropped_old = prune_source(root, old, among=used_before)
+    return {"source": new, "caption": caption, "from": src.get("caption") or old,
+            "sheets_moved": sheets, "calcs_dropped_from_new": len(dropped_new),
+            "calcs_dropped_from_old": dropped_old,
+            "shared_filters_now_cross_source": crossing,
+            "next": f"edit_to_live_sql(..., datasource={caption!r}) with its own SQL, "
+                    f"then the same for the old source, then save_as_extract"}
+
+
+FILTER_GROUP_FIRST = 3     # corpus: shared-filter groups start at 3; 1 and 2 are taken by Tableau
+
+
+def renumber_filter_groups(root) -> dict:
+    """Shared-filter groups below 3 moved up (lint R45), the pairing of sheets kept."""
+    used = sorted({int(f.get("filter-group")) for f in root.iter("filter")
+                   if (f.get("filter-group") or "").isdigit()})
+    low = [g for g in used if g < FILTER_GROUP_FIRST]
+    if not low:
+        return {}
+    nxt = max(used + [FILTER_GROUP_FIRST - 1]) + 1
+    remap = {}
+    for g in low:
+        remap[g] = nxt
+        nxt += 1
+    for f in root.iter("filter"):
+        g = f.get("filter-group")
+        if g and g.isdigit() and int(g) in remap:
+            f.set("filter-group", str(remap[int(g)]))
+    return {str(k): str(v) for k, v in remap.items()}
+
+
 def share_filters(root, source: str, targets: list, fields: list) -> dict:
     """Filters of `source` applied to `targets` too, as Desktop's "Apply to selected worksheets":
     the same `<filter>` in every sheet under one `filter-group`, so one page card drives all."""
@@ -1287,8 +1419,8 @@ def share_filters(root, source: str, targets: list, fields: list) -> dict:
     dsts = [_sheet(root, t) for t in targets]
     if any(d is None for d in dsts):
         raise ValueError(f"sheets not in the workbook: {[t for t, d in zip(targets, dsts) if d is None]}")
-    gid = 1 + max((int(f.get("filter-group")) for f in root.iter("filter")
-                   if (f.get("filter-group") or "").isdigit()), default=0)
+    gid = 1 + max([int(f.get("filter-group")) for f in root.iter("filter")
+                   if (f.get("filter-group") or "").isdigit()] + [FILTER_GROUP_FIRST - 1])
     done, missing = [], []
     for field in fields:
         ref = _filter_ref(root, src, field)
@@ -1895,7 +2027,13 @@ def to_live_sql(root, sql: str, columns: list, *, server: str, port: str,
         for ex in ds.findall("extract"):
             ds.remove(ex)
         changed += 1
+    from .extract import orphan_formula_refs
+    broken: dict = {}
+    for ds in targets:
+        found = orphan_formula_refs(root, ds.get("name"))
+        broken.update({**found["blocking"], **found["idle"]})
     return {"sources_switched": changed, "schema_column_count": len(columns),
+            "formulas_referencing_absent_columns": broken,
             "column_declarations": decls if targets else {},
             "object_graphs_rewritten": graphs,
             "workbook_sources": sorted(set(seen))}
@@ -3205,10 +3343,27 @@ def _quote_member(value: str, datatype: str = "") -> str:
         return f'"{v}"'
 
 
+def _discrete_kind(root, column: str) -> str:
+    """The discrete instance a page card expects: the one already used in the workbook
+    (`[none:partner_id:ok]`), otherwise `ok` for an ordinal column and `nk` for the rest."""
+    src = _declared(root, None, column)
+    name = (src.get("name") or "").strip("[]") if src is not None else column.strip("[]")
+    for e in root.iter():
+        if not isinstance(e.tag, str):
+            continue
+        for v in e.attrib.values():
+            m = re.search(r"\[none:" + re.escape(name) + r":(nk|ok)\]", v)
+            if m:
+                return m.group(1)
+    return "ok" if src is not None and src.get("type") == "ordinal" else "nk"
+
+
 def apply_filter(root, sheets: list, column: str, *, derivation: str = "None",
                  member: str = "", context: bool = False, kind: str = "") -> dict:
     """The same filter ON ALL listed sheets; `kind` (nk, ok, qk) keeps the instance the sheet has."""
     member = _quote_member(member, _datatype_of(root, column))
+    if not kind and derivation == "None":
+        kind = _discrete_kind(root, column)
     kind = kind or {"None": "nk", "Sum": "qk", "CountD": "qk"}.get(derivation, "nk")
 
     put = []

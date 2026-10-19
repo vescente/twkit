@@ -1607,6 +1607,28 @@ def hyper_map(book) -> dict:
     return out
 
 
+def member_counts(path: str, refs: list) -> dict:
+    """Distinct values of source columns in the packaged extracts: `{(datasource, column): n}`.
+    A filter card that keeps every member reads "(All)", not "(Multiple values)"."""
+    from .lint import load
+    hmap = hyper_map(load(path))
+    out = {}
+    for ds, col in set(refs):
+        if ds not in hmap:
+            continue
+        t = None
+        try:
+            t = _open_hyper(path, hmap[ds])
+            out[(ds, col)] = int(list(t.execute(
+                f'SELECT COUNT(DISTINCT "{col}") FROM {t.table}'))[0][0])
+        except Exception:                                     # noqa: BLE001
+            continue
+        finally:
+            if t is not None:
+                t.close()
+    return out
+
+
 _HYPER_CACHE: dict = {}
 
 

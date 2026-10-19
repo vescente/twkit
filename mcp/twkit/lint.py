@@ -1181,6 +1181,55 @@ def r44_parameters_as_primary(b) -> list:
     return out
 
 
+def r45_reserved_filter_group(b) -> list:
+    """Symptom: on a data source refresh Tableau says "Field '[none:x:ok]' which is included
+    for filtering does not exist" and drops the filter.
+
+    A shared filter ("Apply to selected worksheets") carries `filter-group`; the corpus numbers
+    them from 3. Group 2 was read as a filter over related sources: with a second source
+    without the field, the refresh failed (reproduced 2026-10-19).
+    """
+    bad = sorted({(ws.get("name"), f.get("filter-group"), (f.get("column") or "").split("].")[-1])
+                  for ws in b.root.iter("worksheet") for f in ws.iter("filter")
+                  if (f.get("filter-group") or "").isdigit() and int(f.get("filter-group")) < 3})
+    if not bad:
+        return []
+    return [Violation("R45", ERROR,
+                      f"shared filter groups 1-2 are Tableau's own: {len(bad)} filters "
+                      f"({', '.join(f'{s}: {c} in {g}' for s, g, c in bad[:4])})",
+                      fix="edit.renumber_filter_groups(root); new groups start at 3")]
+
+
+def r46_card_instance_mismatch(b) -> list:
+    """Symptom: a filter card on a page is empty ("Not available.", no list).
+
+    A card (`zone type-v2="filter"`) names its sheet and a column instance. When the sheet
+    filters the same column under another instance (`[none:partner_id:nk]` on the sheet, the card
+    on `[none:partner_id:ok]`), the card has nothing to show.
+    """
+    def col(ref):
+        m = re.search(r"\[[a-z]+:(.+):[a-z]+\]$", ref or "")
+        return m.group(1) if m else ""
+    sheets = {w.get("name"): {f.get("column") for f in w.iter("filter")} for w in _worksheets(b)}
+    bad = []
+    for d in b.root.iter("dashboard"):
+        for z in d.iter("zone"):
+            p, name = z.get("param") or "", z.get("name")
+            if z.get("type-v2") != "filter" or not col(p) or name not in sheets or p in sheets[name]:
+                continue
+            twin = [f for f in sheets[name] if f and col(f) == col(p) and f.split("].")[0] == p.split("].")[0]]
+            if twin:
+                bad.append((d.get("name"), name, p.split("].")[-1], twin[0].split("].")[-1]))
+    bad = sorted(set(bad))
+    if not bad:
+        return []
+    return [Violation("R46", ERROR,
+                      f"filter cards on another instance than their sheet filters: {len(bad)} "
+                      f"({', '.join(f'{s}: card {c}, sheet {t}' for _, s, c, t in bad[:3])})",
+                      where=f"page {bad[0][0]}",
+                      fix="filter the card's instance on the sheet (edit_apply_filter keeps it)")]
+
+
 RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r05_measure_names, r06_mysql_connection, r07_extract_packed,
          r08_extension, r10_xsd,
@@ -1194,7 +1243,7 @@ RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r35_naming_and_folders, r36_device_layout_drift, r40_ds_style_encoding,
          r37_gradient_on_plain_measure, r38_label_color_overridden,
          r41_param_ref_by_caption, r42_caption_collision, r43_logical_table_column,
-         r44_parameters_as_primary,
+         r44_parameters_as_primary, r45_reserved_filter_group, r46_card_instance_mismatch,
          r_format_attr]
 
 

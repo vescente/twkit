@@ -1026,7 +1026,8 @@ def register_edit_tools(server) -> None:
 
         Out-of-sync viewpoints cause Internal Error 2805CF18 on navigation; duplicate zone ids stop a
         copied zone from drawing; a repeated shelf field shows two identical columns; a flow whose
-        children stop short shows an empty hatched area (its last free child takes the rest).
+        children stop short shows an empty hatched area (its last free child takes the rest); a
+        shared filter in group 1-2 fails on a data source refresh (R45), its group moves up.
         """
         ed = get_editor()
         root = ed.root
@@ -1041,7 +1042,8 @@ def register_edit_tools(server) -> None:
             gaps += ED.fill_flow_gaps(d)
         return _json.dumps({"windows_synced": vp, "zone_ids_separated": ids,
                             "shelf_repeats_removed": ED.dedupe_shelves(root),
-                            "flow_gaps_filled": gaps},
+                            "flow_gaps_filled": gaps,
+                            "filter_groups_renumbered": ED.renumber_filter_groups(root)},
                            ensure_ascii=False)
 
 
@@ -1427,6 +1429,18 @@ def register_dimension_tools(server) -> None:
         return _json.dumps({"styled": done, "size": size, "family": family,
                             "bands": (band or ST.BAND_WARM) if bands else None},
                            ensure_ascii=False)
+
+    @server.tool()
+    def edit_split_source(sheets: str, caption: str) -> str:
+        """Move sheets (comma-separated) to a copy of their data source named `caption`, so the
+        two parts of a workbook can live on separate SQL (then edit_to_live_sql with
+        datasource=caption). Each source keeps only the calculations something still uses."""
+        try:
+            return _json.dumps(ED.split_source(
+                get_editor().root, [s.strip() for s in sheets.split(",") if s.strip()], caption),
+                ensure_ascii=False)
+        except ValueError as exc:
+            return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
 
     @server.tool()
     def edit_share_filters(source: str, targets: str, fields: str) -> str:

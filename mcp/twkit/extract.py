@@ -212,28 +212,41 @@ def _declaration_only(tag: str, parent_tag: str) -> bool:
             or (None, parent_tag) in _NOT_A_READ)
 
 
-def orphan_formula_refs(root) -> dict:
-    """Fields referenced by formulas that no longer exist in the workbook."""
-    import re
-
-    from lxml import etree
-
+def _known_names(scope) -> set:
     known: set = set()
-    for col in root.iter("column"):
+    for col in scope.iter("column"):
         nm = (col.get("name") or "").strip("[]")
         if nm:
             known.add(nm)
         if col.get("caption"):
             known.add(col.get("caption"))
-    for rel in root.iter("relation"):
+    for rel in scope.iter("relation"):
         cols = rel.find("columns")
         for c in (cols if cols is not None else []):
             if c.get("name"):
                 known.add(c.get("name"))
-    for g in root.iter("group"):
+    for rec in scope.iter("metadata-record"):
+        for tag in ("local-name", "remote-name"):
+            if rec.findtext(tag):
+                known.add(rec.findtext(tag).strip("[]"))
+    for g in scope.iter("group"):
         for key in ("name", "caption"):
             if g.get(key):
                 known.add(g.get(key).strip("[]"))
+    return known
+
+
+def orphan_formula_refs(root, datasource: str = "") -> dict:
+    """Fields referenced by formulas that no longer exist IN THE FORMULA'S OWN SOURCE: with two
+    sources a name living in the other one does not count. `datasource`: check only that one."""
+    import re
+
+    from lxml import etree
+
+    sources = {d.get("name"): d for d in root.findall("datasources/datasource")}
+    known_by = {n: _known_names(d) for n, d in sources.items()}
+    want = next((n for n, d in sources.items() if datasource in (n, d.get("caption"))), datasource)
+    everywhere = _known_names(root)
 
     used_on_sheets: set = set()
     for holder in list(root.iter("worksheet")) + list(root.iter("dashboard")):
@@ -246,7 +259,15 @@ def orphan_formula_refs(root) -> dict:
         calc = col.find("calculation")
         if calc is None or not calc.get("formula"):
             continue
+        par = col.getparent()
+        home = (par.get("name") if par is not None and par.tag == "datasource"
+                else par.get("datasource") if par is not None
+                and par.tag == "datasource-dependencies" else None)
+        if want and home != want:
+            continue
+        known = known_by.get(home, everywhere)
         body = re.sub(r"\[[^\[\]]+\]\.\[[^\[\]]+\]", " ", calc.get("formula"))
+        body = re.sub(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", " ", body)
         miss = sorted({m for m in re.findall(r"\[([^\[\]]+)\]", body) if m not in known})
         if not miss:
             continue
