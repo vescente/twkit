@@ -1388,6 +1388,86 @@ def register_dimension_tools(server) -> None:
             return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
 
     @server.tool()
+    def edit_table_style(sheets: str, size: str = "10", family: str = "Tableau Book",
+                         bands: bool = True, band: str = "", header: str = "") -> str:
+        """House look of text tables in one call (DESIGN_KB section 5, traits T1 and T2).
+
+        One family and size for cells, row and column headers; zebra rows (`band`, house
+        `#f6f1ef`; on cool accents and white pages a neutral `#f7f7f8`); no borders, no grid.
+        Accent formats set on a field (a header background, a bold label) stay.
+        `header`: a dark column-header band, e.g. `#484848`; a nested level gets `#6f6f6f`, labels
+        `#f5f5f5`, the outer level bold, field labels hidden. Deltas by sign (T3) are
+        `edit_sign_color`.
+        """
+        from twkit import style as ST
+        ed = get_editor()
+        done = []
+        for name in [s.strip() for s in sheets.split(",") if s.strip()]:
+            ws = next((w for w in ed.root.iter("worksheet") if w.get("name") == name), None)
+            if ws is None:
+                return _json.dumps({"REFUSED": f"no sheet {name!r}"}, ensure_ascii=False)
+            ST.uniform_type(ws, size=size, family=family)
+            if bands:
+                ST.row_bands(ws, color=band or ST.BAND_WARM)
+            ed.configure_worksheet_style(name, hide_gridlines=True, hide_borders=True)
+            if header:
+                levels = ED.shelf_tokens(ws.findtext("table/cols") or "")
+                levels = [t for t in levels if ":none:" in t or "].[none:" in t
+                          or t.endswith("[:Measure Names]") or ":ok]" in t or ":nk]" in t]
+                fills = [header] + ["#6f6f6f"] * max(0, len(levels) - 1)
+                heads = [{"field": t, "background-color": c} for t, c in zip(levels, fills)]
+                labels = [{"field": t, "color": "#f5f5f5", **({"font-weight": "bold"} if i == 0
+                                                             and len(levels) > 1 else {})}
+                          for i, t in enumerate(levels)]
+                ed.configure_worksheet_style(name, header_formats=heads, label_formats=labels,
+                                             hide_col_field_labels=True,
+                                             hide_row_field_labels=True)
+            done.append(name)
+        return _json.dumps({"styled": done, "size": size, "family": family,
+                            "bands": (band or ST.BAND_WARM) if bands else None},
+                           ensure_ascii=False)
+
+    @server.tool()
+    def edit_page_background(dashboards: str, color: str = "#ffffff") -> str:
+        """Page background: the outer container's fill (zone style `background-color`).
+
+        Inner containers and cards keep their own fills; a sheet with a transparent table shows
+        the page through it.
+        """
+        ed = get_editor()
+        done = []
+        for name in [s.strip() for s in dashboards.split(",") if s.strip()]:
+            dash = next((d for d in ed.root.iter("dashboard") if d.get("name") == name), None)
+            top = dash.find("zones/zone") if dash is not None else None
+            if top is None:
+                return _json.dumps({"REFUSED": f"no page {name!r}"}, ensure_ascii=False)
+            ED._page_zone_style(top, {"background-color": color})
+            done.append(name)
+        return _json.dumps({"pages": done, "background": color}, ensure_ascii=False)
+
+    @server.tool()
+    def edit_remove_zones(dashboard: str, ids: str) -> str:
+        """Remove zones of a page by id (a card, a sheet, a text); in a flow the neighbours take
+        the space, as in Desktop. Ids: list_dashboards / describe_render."""
+        ed = get_editor()
+        dash = next((d for d in ed.root.iter("dashboard") if d.get("name") == dashboard), None)
+        if dash is None or dash.find("zones") is None:
+            return _json.dumps({"REFUSED": f"no page {dashboard!r}"}, ensure_ascii=False)
+        want = {i.strip() for i in ids.split(",") if i.strip()}
+        gone = []
+        for z in list(dash.find("zones").iter("zone")):
+            if z.get("id") in want:
+                gone.append({"id": z.get("id"), "type": z.get("type-v2") or "sheet",
+                             "name": z.get("name") or z.get("param") or ""})
+                ED.drop_zone(z)
+        win = next((w for w in ed.root.find("windows").findall("window")
+                    if w.get("class") == "dashboard" and w.get("name") == dashboard), None)
+        if win is not None:
+            ED.sync_viewpoints(win, dash)
+        missing = sorted(want - {g["id"] for g in gone})
+        return _json.dumps({"removed": gone, "not_found": missing}, ensure_ascii=False)
+
+    @server.tool()
     def edit_zone_title(dashboard: str, titles: str) -> str:
         """Custom title of a control on a page (filter, parameter, legend).
 

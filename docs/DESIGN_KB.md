@@ -286,6 +286,12 @@ shrinks a size already set.
 - **Column order is logic, not alphabet:** volume → money → ratio, each delta right after its measure. Tableau
   sorts measure columns alphabetically unless told (`edit_order_measures`).
 - **Conditional color on one or two key columns,** not all; heat fill via `edit_heat_columns`.
+- **Wide tables scroll, they do not squeeze.** When the columns' natural width exceeds the zone
+  (a measure table of 20+ columns, metric × Fact/Plan/Δ), keep the zone `standard` and let the reader
+  swipe right: `Fit Width` / `Entire View` shrink columns until values turn into `###` and headers
+  collapse (owner, 2026-10-19). Fit only tables that fit at the page's minimum width:
+  `edit_zone_fit(mode="standard")`, value cells wide enough for the longest value (`edit_column_width`
+  on `Measure Names`, element `cell`).
 - **Row budget:** past about 50 rows it is a detail table (bottom, behind a filter, or top-N). Headers wrap to
   two lines rather than widen a numeric column.
 

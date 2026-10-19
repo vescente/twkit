@@ -2038,3 +2038,13 @@ def test_phone_layout_keeps_the_ids_of_the_page():
     phone.append(copy.deepcopy(dash.find("zones/zone")))
     assert ED.unique_zone_ids(dash) == 0
     assert {z.get("id") for z in phone.iter("zone")} == {z.get("id") for z in dash.find("zones").iter("zone")}
+
+
+def test_viewpoint_without_zoom_stays_standard():
+    root = _page_root()
+    dash = root.find("dashboards")[0]
+    win = root.find("windows")[0]
+    vp = win.find(".//viewpoint")
+    vp.remove(vp.find("zoom"))
+    ED.sync_viewpoints(win, dash)
+    assert win.find(".//viewpoint").find("zoom") is None
