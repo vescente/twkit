@@ -1950,3 +1950,91 @@ def test_custom_sql_doubling_keeps_parameter_tokens():
     stored = dryrun.escape_sql(sql)
     assert stored == "SELECT 1 WHERE a <<= 2 AND b <<>> c AND d >> <[Parameters].[Min]>"
     assert dryrun.unescape_sql(stored) == sql
+
+
+_PAGE = """<workbook><worksheets>
+<worksheet name='A'><table><view>
+ <filter column='[ds].[none:g:nk]'/><filter column='[ds].[:Measure Names]'/></view></table></worksheet>
+<worksheet name='B'><table><view><filter column='[ds].[:Measure Names]'/>
+ <filter column='[ds].[none:metric:nk]'/></view></table></worksheet>
+</worksheets><dashboards><dashboard name='P'><zones>
+<zone id='1' type-v2='layout-flow' param='vert' x='0' y='0' w='100000' h='100000'>
+ <zone id='2' type-v2='layout-flow' param='horz' x='600' y='900' w='98800' h='9000' fixed-size='70' is-fixed='true'>
+  <zone id='3' type-v2='paramctrl' param='[Parameters].[p]' x='1000' y='1400' w='9000' h='8000'/>
+  <zone id='4' type-v2='filter' name='A' param='[ds].[none:g:nk]' mode='checkdropdown' values='all' x='10000' y='1400' w='9000' h='8000'/>
+  <zone id='5' type-v2='filter' name='A' param='[ds].[:Measure Names]' mode='checkdropdown' values='database' x='19000' y='1400' w='9000' h='8000'/>
+ </zone>
+ <zone id='6' name='A' x='600' y='9900' w='98800' h='50000'><layout-cache type-h='fixed'/></zone>
+</zone></zones></dashboard></dashboards>
+<windows><window class='dashboard' name='P'><viewpoints><viewpoint name='A'><zoom type='fit-width'/></viewpoint></viewpoints>
+<simple-id uuid='{0}'/></window></windows></workbook>"""
+
+
+def _page_root():
+    return etree.fromstring(_PAGE)
+
+
+def test_copy_drops_cards_the_new_sheet_does_not_filter():
+    root = _page_root()
+    res = ED.clone_dashboard(root, "P", "Q", {"A": "B"})
+    assert res["dropped_cards"] == ["[ds].[none:g:nk]"]
+    dash = root.find("dashboards")[-1]
+    cards = [z for z in dash.iter("zone") if z.get("type-v2") == "filter"]
+    assert [(c.get("name"), c.get("param")) for c in cards] == [("B", "[ds].[:Measure Names]")]
+    row = [z for z in dash.iter("zone") if z.get("id") == "2"][0]
+    kids = row.findall("zone")
+    assert int(kids[1].get("x")) == int(kids[0].get("x")) + int(kids[0].get("w")), "no gap left"
+    assert int(kids[-1].get("x")) + int(kids[-1].get("w")) == 28000, "the row keeps its span"
+    vp = root.find("windows")[-1].find(".//viewpoint")
+    assert (vp.get("name"), vp.find("zoom").get("type")) == ("B", "fit-width")
+
+
+def test_filter_card_is_added_next_to_a_control_and_the_row_is_relaid():
+    root = _page_root()
+    ED.clone_dashboard(root, "P", "Q", {"A": "B"})
+    res = ED.add_filter_card(root, "Q", "B", "metric", after_id="3", title="Select metrics")
+    assert res["added"]
+    dash = root.find("dashboards")[-1]
+    row = [z for z in dash.iter("zone") if z.get("id") == "2"][0]
+    kids = row.findall("zone")
+    assert [k.get("type-v2") for k in kids] == ["paramctrl", "filter", "filter"]
+    card = kids[1]
+    assert (card.get("name"), card.get("param"), card.get("mode")) == \
+        ("B", "[ds].[none:metric:nk]", "checkdropdown")
+    assert all(int(b.get("x")) == int(a.get("x")) + int(a.get("w")) for a, b in zip(kids, kids[1:]))
+    assert int(kids[-1].get("x")) + int(kids[-1].get("w")) == 28000
+    ws = [w for w in root.iter("worksheet") if w.get("name") == "B"][0]
+    t = ws.find(".//style-rule[@element='quick-filter']/format[@attr='title']")
+    assert (t.get("field"), t.get("value")) == ("[ds].[none:metric:nk]", "Select metrics")
+
+
+def test_filter_card_needs_the_filter_on_its_sheet():
+    root = _page_root()
+    with pytest.raises(ValueError, match="no filter"):
+        ED.add_filter_card(root, "P", "A", "metric", after_id="3")
+
+
+def test_title_of_a_card_already_on_the_page_is_set_without_a_second_card():
+    root = _page_root()
+    res = ED.add_filter_card(root, "P", "A", "Measure Names", after_id="3", title="Measures")
+    assert not res["added"] and res["zone_id"] == "5"
+    assert len([z for z in root.iter("zone") if z.get("param") == "[ds].[:Measure Names]"]) == 1
+
+
+def test_flow_gap_left_by_a_removed_zone_is_filled_by_the_last_free_zone():
+    root = _page_root()
+    dash = root.find("dashboards")[0]
+    assert ED.fill_flow_gaps(dash) == 2, "the control row and the page"
+    sheet = [z for z in dash.iter("zone") if z.get("id") == "6"][0]
+    assert int(sheet.get("y")) + int(sheet.get("h")) == 100000 - 900
+    assert sheet.find("layout-cache") is None
+    assert ED.fill_flow_gaps(dash) == 0, "a filled page is left alone"
+
+
+def test_phone_layout_keeps_the_ids_of_the_page():
+    root = _page_root()
+    dash = root.find("dashboards")[0]
+    phone = etree.SubElement(etree.SubElement(dash, "devicelayouts"), "devicelayout")
+    phone.append(copy.deepcopy(dash.find("zones/zone")))
+    assert ED.unique_zone_ids(dash) == 0
+    assert {z.get("id") for z in phone.iter("zone")} == {z.get("id") for z in dash.find("zones").iter("zone")}

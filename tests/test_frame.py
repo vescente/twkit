@@ -156,3 +156,8 @@ def test_custom_tooltip_is_shown_on_hover_with_first_mark_values():
     html = FR._page_html("D", root.find(".//dashboard"), {"T": root.find(".//worksheet")}, data, "t", root)
     assert "data-tooltip='1'" in html
     assert re.search(r"title='Sales:\s+1,234'", html), re.findall(r"title='[^']*'", html)
+
+
+def test_standard_number_mask_is_not_printed_as_a_prefix():
+    assert FR._fmt(1320, "Reg count", "N") == "1,320"
+    assert FR._fmt(16139.0, "", "N") == "16,139"

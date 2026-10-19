@@ -959,6 +959,8 @@ def register_edit_tools(server) -> None:
         sheet_map_json: {"template_sheet": "new_sheet"}; null removes the zone (with its color
         legend). The copy gets its own window, unique zone ids, viewpoints for its actual sheets
         and no phone layout (otherwise Tableau fails with Internal Error 2805CF18 on navigation).
+        A filter card whose field the new sheet does not filter is dropped (`dropped_cards`);
+        in a flow the neighbours take its space.
         with_button: add a navigation button to every page.
         """
         ed = get_editor()
@@ -1019,10 +1021,11 @@ def register_edit_tools(server) -> None:
 
     @server.tool()
     def edit_repair_dashboards() -> str:
-        """Preventive repair of all dashboards: viewpoints, zone ids, repeated shelf fields.
+        """Preventive repair of all dashboards: viewpoints, zone ids, repeated shelf fields, flow gaps.
 
         Out-of-sync viewpoints cause Internal Error 2805CF18 on navigation; duplicate zone ids stop a
-        copied zone from drawing; a repeated shelf field shows two identical columns.
+        copied zone from drawing; a repeated shelf field shows two identical columns; a flow whose
+        children stop short shows an empty hatched area (its last free child takes the rest).
         """
         ed = get_editor()
         root = ed.root
@@ -1031,10 +1034,13 @@ def register_edit_tools(server) -> None:
         for w in root.find("windows").findall("window"):
             if w.get("class") == "dashboard" and w.get("name") in dmap:
                 vp += 1 if ED.sync_viewpoints(w, dmap[w.get("name")]) else 0
+        gaps = 0
         for d in dmap.values():
             ids += ED.unique_zone_ids(d)
+            gaps += ED.fill_flow_gaps(d)
         return _json.dumps({"windows_synced": vp, "zone_ids_separated": ids,
-                            "shelf_repeats_removed": ED.dedupe_shelves(root)},
+                            "shelf_repeats_removed": ED.dedupe_shelves(root),
+                            "flow_gaps_filled": gaps},
                            ensure_ascii=False)
 
 
@@ -1401,6 +1407,22 @@ def register_dimension_tools(server) -> None:
         try:
             return _json.dumps(ED.zone_title(get_editor().root, dashboard, m),
                                ensure_ascii=False)
+        except ValueError as exc:
+            return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
+
+    @server.tool()
+    def edit_add_filter_card(dashboard: str, sheet: str, field: str, after_id: str,
+                             title: str = "") -> str:
+        """A filter card on a page next to control `after_id`, sized and styled like it.
+
+        `field`: caption, name or the filter's column reference; the sheet must already filter
+        it (a card without a filter on its sheet shows nothing). In a row or column of controls
+        the flow is laid out again. `title`: the card's own title (kept in the sheet style, as
+        Tableau does); for a card already on the page only the title is set.
+        """
+        try:
+            return _json.dumps(ED.add_filter_card(get_editor().root, dashboard, sheet, field,
+                                                  after_id, title), ensure_ascii=False)
         except ValueError as exc:
             return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
 

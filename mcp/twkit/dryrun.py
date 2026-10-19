@@ -45,6 +45,8 @@ class SheetResult:
     measure_labels: list = field(default_factory=list)
     dim_refs: list = field(default_factory=list)
     measure_refs: list = field(default_factory=list)
+    totals: list = field(default_factory=list)       # grand total rows: kept dims + measures
+    total_keep: list = field(default_factory=list)   # indices of the dims a total row keeps
 
     def as_dict(self) -> dict:
         out = {"sheet": self.sheet, "status": self.status, "rows": self.rows,
@@ -2302,6 +2304,10 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
                sample_rows: int = 3, relax: bool = False, dynamic: bool = False) -> SheetResult:
     """`relax=True` runs the sheet without the untranslatable part instead of refusing."""
     name = ws.get("name") or "?"
+    dss = [d.get("name") for d in ws.findall("table/view/datasources/datasource")]
+    if len(dss) > 1 and dss[0] == "Parameters":
+        return SheetResult(name, "empty", note="Tableau drops every field: Parameters is the "
+                                               "primary source (listed first in <datasources>)")
     dropped: list[str] = []
     refs: list[str] = []
     for tag in ("rows", "cols"):
@@ -2649,8 +2655,36 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     if not rows:
         return SheetResult(name, "empty", sql=sql,
                            note="the sheet returns ZERO rows and will open empty", **extra)
+    if not (tc_out or tc_filters or havings or lod_pending or fine_lod):
+        extra.update(_grand_totals(ws, target, dims, measures, dref, wheres, sample_rows))
     return SheetResult(name, "ok", rows=len(rows), sql=sql,
                        sample=[list(map(str, r)) for r in rows[:sample_rows]], **extra)
+
+
+def _grand_totals(ws, target, dims: list, measures: list, dref: list, wheres: list,
+                  limit: int) -> dict:
+    """Grand total row (`<rows total='true'>`): the measures over the row dimensions, as Tableau
+    aggregates them, not a sum of the cells; a failed query leaves the total undrawn."""
+    shelf = ws.find("table/rows")
+    if shelf is None or shelf.get("total") != "true" or not measures:
+        return {}
+    on_rows = set(inst_refs(shelf.text or ""))
+    keep = [i for i, r in enumerate(dref) if r not in on_rows]
+    if len(keep) == len(dims):
+        return {}
+    kd = [dims[i] for i in keep]
+    select = ", ".join(kd + measures)
+    sql = f"SELECT {select} FROM {_table_for(target, select + ' ' + ' '.join(wheres))}"
+    if wheres:
+        sql += " WHERE " + " AND ".join(wheres)
+    if kd:
+        groups = ", ".join(str(i + 1) for i in range(len(kd)))
+        sql += f" GROUP BY {groups} ORDER BY {groups}"
+    try:
+        rows = target.execute(f"{sql} LIMIT {int(limit)}")
+    except Exception:
+        return {}
+    return {"totals": [list(map(str, r)) for r in rows], "total_keep": keep}
 
 
 def format_report(results: list[SheetResult]) -> str:

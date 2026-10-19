@@ -583,3 +583,18 @@ def test_r43_logical_table_needs_its_table_column():
     assert len(v) == 1 and v[0].severity == ERROR and "_A1" in v[0].message
     v = r43_logical_table_column(_graph_book(True, "[_GONE]"))
     assert len(v) == 1 and "[user_group]" in v[0].message
+
+
+def test_r44_parameters_listed_first_drops_the_sheet_fields():
+    from twkit.lint import Book, r44_parameters_as_primary
+    from twkit import safexml
+
+    def book(order):
+        dss = "".join(f"<datasource name='{n}'/>" for n in order)
+        xml = (f"<workbook><worksheets><worksheet name='S'><table><view><datasources>{dss}"
+               "</datasources></view></table></worksheet></worksheets></workbook>")
+        return Book(path="<memory>", root=safexml.from_bytes(xml.encode()), raw=xml.encode(),
+                    is_twbx=False)
+    assert r44_parameters_as_primary(book(["federated.1", "Parameters"])) == []
+    v = r44_parameters_as_primary(book(["Parameters", "federated.1"]))
+    assert len(v) == 1 and v[0].severity == ERROR

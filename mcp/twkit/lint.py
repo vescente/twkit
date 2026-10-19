@@ -1160,6 +1160,25 @@ def r43_logical_table_column(b) -> list:
     return out
 
 
+def r44_parameters_as_primary(b) -> list:
+    """Symptom: a sheet opens with empty shelves; on a page its zone and filter cards are blank.
+
+    The first source of `<view><datasources>` is the sheet's primary one. Desktop lists
+    Parameters after it; with Parameters first, every field of the real source is dropped.
+    """
+    out = []
+    for ws in b.root.iter("worksheet"):
+        dss = ws.find("table/view/datasources")
+        names = [d.get("name") for d in dss] if dss is not None else []
+        if len(names) < 2 or names[0] != "Parameters":
+            continue
+        out.append(Violation(
+            "R44", ERROR, f"Parameters is the primary source; fields of {names[1]} are dropped",
+            where=f"worksheet {ws.get('name')}",
+            fix="list the data source first in <view><datasources>, Parameters after it"))
+    return out
+
+
 RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r05_measure_names, r06_mysql_connection, r07_extract_packed,
          r08_extension, r10_xsd,
@@ -1173,6 +1192,7 @@ RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r35_naming_and_folders, r36_device_layout_drift, r40_ds_style_encoding,
          r37_gradient_on_plain_measure, r38_label_color_overridden,
          r41_param_ref_by_caption, r42_caption_collision, r43_logical_table_column,
+         r44_parameters_as_primary,
          r_format_attr]
 
 

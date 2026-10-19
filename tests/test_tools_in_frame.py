@@ -75,12 +75,17 @@ VISIBLE = [
     ("edit_zone_style", dict(dashboard="Overview", sheets="Bars", background="#fff3e0"), []),
     (*FILTER, []),
     ("edit_control_column", dict(dashboard="Overview", refs="Bars|[@DS].[none:product:nk]"), [FILTER]),
+    ("edit_add_filter_card", dict(dashboard="Overview", sheet="Bars", field="product",
+                                  after_id="@PARAMZONE", title="Product"), [FILTER]),
     ("edit_transpose_flow", dict(dashboard="Grid", zone_id="@GRIDZONE"), []),
     ("configure_chart", dict(worksheet_name="Bars", mark_type="Circle", rows=["country"],
                              columns=["SUM(sales)"]), []),
     ("configure_dual_axis", dict(worksheet_name="Trend", mark_type_1="Line", mark_type_2="Bar",
                                  columns=["MONTH(date)"], rows=["SUM(sales)", "SUM(cost)"]), []),
     ("configure_worksheet_style", dict(worksheet_name="Bars", background_color="#fff3e0"), []),
+    ("configure_worksheet_style", dict(worksheet_name="Table", header_formats=[
+        {"field": "country", "background-color": "#484848"}],
+        mark_formats=[{"opacity": "0.45"}], mark_label_formats=[{"color": "#333333"}]), []),
     ("add_reference_line", dict(worksheet_name="Trend", axis_field="SUM(sales)", value_field="SUM(sales)",
                                 formula="average"), []),
     ("add_dashboard", dict(dashboard_name="Second", worksheet_names=["Bars"]), []),
@@ -230,3 +235,33 @@ def test_running_total_is_computed_in_frame(book):
     for c in sorted(totals):
         acc += totals[c]
         assert f"{acc:,.0f}" in text, (c, acc)
+
+
+def test_style_formats_address_a_field_and_the_panes(book):
+    p = _state(book, "fieldstyle", [("configure_worksheet_style", dict(
+        worksheet_name="Table", header_formats=[{"field": "country", "background-color": "#484848"},
+                                                {"field": "Measure Names", "height": "20"},
+                                                {"field": "country", "data-class": "total",
+                                                 "total-label": "Total"}],
+        mark_formats=[{"opacity": "0.45"}]))])
+    ws = next(w for w in safexml.from_twbx(p).iter("worksheet") if w.get("name") == "Table")
+    got = {(f.get("attr"), f.get("field", "").split("].[")[-1]) for f in
+           ws.findall("table/style/style-rule[@element='header']/format")}
+    assert {("background-color", "none:country:nk]"), ("height", ":Measure Names]")} <= got
+    tot = ws.find("table/style/style-rule[@element='header']/format[@attr='total-label']")
+    assert (tot.get("data-class"), tot.get("value")) == ("total", "Total")
+    assert all(pn.find("style/style-rule[@element='mark']/format[@attr='opacity']") is not None
+               for pn in ws.iter("pane"))
+
+
+def test_measure_names_filter_sits_on_the_filter_shelf(book):
+    root = safexml.from_twbx(book["path"])
+    seen = 0
+    for ws in root.iter("worksheet"):
+        view = ws.find("table/view")
+        if not any((f.get("column") or "").endswith("[:Measure Names]") for f in view.iter("filter")):
+            continue
+        seen += 1
+        first = view.find("slices/column")
+        assert first is not None and first.text.endswith("[:Measure Names]"), ws.get("name")
+    assert seen
