@@ -178,6 +178,18 @@ per-workbook script.
   filter; only data in the view proves it.
 - **Table calculations are about direction.** The attribute names the partition, so it reads
   backwards (`Columns` accumulates down the rows). Only `down`, `across`, `by field` are accepted.
+- **The first source of a sheet is its primary one.** With `Parameters` listed first in
+  `<view><datasources>` Desktop drops every field of the real source: empty shelves, a blank zone
+  and blank filter cards, no error, no query. Lint `R44`; the dry run reports the sheet empty.
+- **A calculation lives in two places**: the data source and every sheet's
+  `<datasource-dependencies>`. A formula or `default-format` changed in one copy only leaves the
+  sheet computing the old one; `edit_set_formula` edits both.
+- **A copied page keeps only cards its new sheet can drive.** `clone_dashboard` drops a filter card
+  whose field the target sheet does not filter (`dropped_cards`); in a flow the neighbours take the
+  space, as in Desktop. A new card goes in with `edit_add_filter_card`, its title in the sheet style.
+- **A zone removed outside Desktop leaves a hole.** A flow whose children stop short shows a hatched
+  area; `edit_repair_dashboards` gives the rest to the last free child. Zone ids are unique per
+  layout: a phone layout repeats the page's ids on purpose.
 - **`save_workbook` refuses a blocker** (extract references, format); `force=True` saves anyway.
 - **The Tableau window is shared.** Captures lock it (`shot.acquire_window`), open a working copy
   under their own name, close it afterwards, and never quit Tableau.

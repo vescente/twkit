@@ -119,14 +119,43 @@ def _table_rule(ws, element: str):
     return ED._style_rule(ws.find("table"), element)
 
 
-def _format(rule, attr: str, value, field: str = "", scope: str = "") -> None:
+def _style_ref(root, ws, field: str) -> str:
+    """A field as a style format addresses it: the instance the sheet uses."""
+    if field.startswith("[") and "].[" in field:
+        return field
+    ds = ED._ds_name(ws)
+    if field.strip("[]:") == "Measure Names":
+        return f"[{ds}].[:Measure Names]"
+    for name in ED.field_names(root, field):
+        ref = ED._instance_on_sheet(ws, ds, name)
+        if ref:
+            return ref
+    raise ValueError(f"field {field!r} is not on sheet {ws.get('name')!r}")
+
+
+def _pane_rule(pane, element: str):
+    st = pane.find("style")
+    if st is None:
+        st = etree.Element("style")
+        ED.insert_in_order(pane, st, PANE_ORDER)
+    rule = next((r for r in st.findall("style-rule") if r.get("element") == element), None)
+    if rule is None:
+        rule = etree.SubElement(st, "style-rule")
+        rule.set("element", element)
+    return rule
+
+
+def _format(rule, attr: str, value, field: str = "", scope: str = "",
+            data_class: str = "") -> None:
     for f in rule.findall("format"):
         if f.get("attr") == attr and (f.get("field") or "") == field \
-                and (f.get("scope") or "") == scope:
+                and (f.get("scope") or "") == scope and (f.get("data-class") or "") == data_class:
             f.set("value", str(value))
             return
     f = etree.SubElement(rule, "format")
     f.set("attr", attr)
+    if data_class:
+        f.set("data-class", data_class)
     if field:
         f.set("field", field)
     if scope:
@@ -195,13 +224,17 @@ def _values_filter(root, ws, field: str, values: list) -> str:
     return p.ref
 
 
-def _slice(view, ref: str) -> None:
+def _slice(view, ref: str, first: bool = False) -> None:
+    """A filtered field on the sheet's filter shelf: without it Tableau draws neither the
+    sheet nor its filter cards. Desktop lists Measure Names first."""
     sl = view.find("slices")
     if sl is None:
         sl = etree.Element("slices")
         ED.insert_in_order(view, sl, list(ORD.VIEW_ORDER))
     if not any((c.text or "") == ref for c in sl.findall("column")):
-        etree.SubElement(sl, "column").text = ref
+        col = etree.Element("column")
+        col.text = ref
+        sl.insert(0, col) if first else sl.append(col)
 
 
 def _order_expr(root, ws, by: str) -> str:
@@ -362,6 +395,7 @@ def configure(book, worksheet_name: str, mark_type: str = "Automatic",
             g.set("level", "[:Measure Names]")
             g.set("member", f'"{p.ref}"')
         ED.insert_in_order(table.find("view"), filt, list(ORD.VIEW_ORDER))
+        _slice(table.find("view"), names, first=True)
         cols_items.append((names, True))
         _encode(pane, "text", f"[{dsn}].[Multiple Values]")
         measures += mv
@@ -663,8 +697,14 @@ def style(book, worksheet_name: str, background_color: str | None = None,
           hide_row_label: str | None = None, hide_col_field_labels: bool = False,
           hide_row_field_labels: bool = False, disable_tooltip: bool = False,
           label_formats: list | None = None, cell_formats: list | None = None,
-          header_formats: list | None = None) -> str:
-    """Sheet-level formatting: background, axes, grid, borders, bands, field labels, fonts."""
+          header_formats: list | None = None, worksheet_formats: list | None = None,
+          mark_formats: list | None = None, mark_label_formats: list | None = None) -> str:
+    """Sheet-level formatting: background, axes, grid, borders, bands, field labels, fonts.
+
+    A format item `{"attr": value, ...}` may carry `field` (caption, name, `Measure Names` or a
+    reference) and `scope` (rows, cols): `{"field": "Metric", "background-color": "#484848"}`.
+    `mark_formats` / `mark_label_formats` go to every pane (opacity, size; mark label color).
+    """
     ws = book.sheet(worksheet_name)
     if background_color:
         _format(_table_rule(ws, "table"), "background-color", background_color)
@@ -689,10 +729,20 @@ def style(book, worksheet_name: str, background_color: str | None = None,
         if flag:
             _format(_table_rule(ws, "worksheet"), "display-field-labels", "false", scope=scope)
     for element, items in (("label", label_formats), ("cell", cell_formats),
-                           ("header", header_formats)):
+                           ("header", header_formats), ("worksheet", worksheet_formats)):
         for item in items or []:
+            item = dict(item)
+            field = _style_ref(book.root, ws, item.pop("field")) if item.get("field") else ""
+            scope = item.pop("scope", "")
+            data_class = item.pop("data-class", "")
             for attr, value in item.items():
-                _format(_table_rule(ws, element), attr, value)
+                _format(_table_rule(ws, element), attr, value, field=field, scope=scope,
+                        data_class=data_class)
+    for element, items in (("mark", mark_formats), ("label", mark_label_formats)):
+        for item in items or []:
+            for pane in ws.iter("pane"):
+                for attr, value in item.items():
+                    _format(_pane_rule(pane, element), attr, value)
     if disable_tooltip:
         table = ws.find("table")
         ts = table.find("tooltip-style")

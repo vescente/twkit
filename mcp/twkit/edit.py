@@ -1049,20 +1049,27 @@ def strip_phone_layout(dash) -> bool:
 
 
 def unique_zone_ids(dash) -> int:
-    """Make repeated zone `id`s unique within a dashboard."""
-    seen, fixed = set(), 0
+    """Make repeated zone `id`s unique within each layout of a dashboard.
+
+    A phone layout repeats the ids of the default layout on purpose: Tableau ties its zones to
+    the page's by id, so ids are made unique per layout, never across them.
+    """
     mx = max((int(z.get("id")) for z in dash.iter("zone")
               if (z.get("id") or "").isdigit()), default=0)
-    for z in dash.iter("zone"):
-        zid = z.get("id")
-        if not zid:
-            continue
-        if zid in seen:
-            mx += 1
-            z.set("id", str(mx))
-            fixed += 1
-        else:
-            seen.add(zid)
+    fixed = 0
+    layouts = [dash.find("zones")] + dash.findall("devicelayouts/devicelayout")
+    for layout in (lay for lay in layouts if lay is not None):
+        seen = set()
+        for z in layout.iter("zone"):
+            zid = z.get("id")
+            if not zid:
+                continue
+            if zid in seen:
+                mx += 1
+                z.set("id", str(mx))
+                fixed += 1
+            else:
+                seen.add(zid)
     return fixed
 
 
@@ -1083,19 +1090,24 @@ def clone_dashboard(root, source: str, name: str, sheet_map: dict) -> dict:
     sid = dash.find("simple-id")
     if sid is not None:
         sid.set("uuid", new_uuid())
+    strip_phone_layout(dash)
+    dead = []
     for z in list(dash.iter("zone")):
         zn = z.get("name")
         if zn not in sheet_map:
             continue
         target = sheet_map[zn]
-        if target and z.get("type-v2") != "color":
+        if (target and z.get("type-v2") == "filter"
+                and z.get("param") not in sheet_filter_columns(root, target)):
+            dead.append(z.get("param"))
+            drop_zone(z)
+        elif target and z.get("type-v2") != "color":
             z.set("name", target)
             cache = z.find("layout-cache")
             if cache is not None:
                 z.remove(cache)
         else:
-            z.getparent().remove(z)
-    strip_phone_layout(dash)
+            drop_zone(z)
     unique_zone_ids(dash)
     dashes.append(dash)
 
@@ -1105,9 +1117,198 @@ def clone_dashboard(root, source: str, name: str, sheet_map: dict) -> dict:
     wsid = win.find("simple-id")
     if wsid is not None:
         wsid.set("uuid", wid)
+    for vp in win.iter("viewpoint"):
+        if sheet_map.get(vp.get("name")):
+            vp.set("name", sheet_map[vp.get("name")])
     sync_viewpoints(win, dash)
     windows.append(win)
-    return {"page": name, "window_uuid": wid}
+    res = {"page": name, "window_uuid": wid}
+    if dead:
+        res["dropped_cards"] = dead
+    return res
+
+
+def sheet_filter_columns(root, sheet: str) -> set:
+    """Fields filtered on a worksheet: a page card works only for these."""
+    ws = next((w for w in root.iter("worksheet") if w.get("name") == sheet), None)
+    return set() if ws is None else {f.get("column") for f in ws.iter("filter")}
+
+
+def _flow_span(flow):
+    pos, size = ("x", "w") if flow.get("param") == "horz" else ("y", "h")
+    kids = flow.findall("zone")
+    if not kids:
+        return None
+    return (min(int(k.get(pos)) for k in kids),
+            max(int(k.get(pos)) + int(k.get(size)) for k in kids))
+
+
+def _shift_axis(zone, pos: str, size: str, at: int, n: int) -> None:
+    old_at, old_n = int(zone.get(pos)), int(zone.get(size)) or 1
+    for d in zone.iter("zone"):
+        if d is zone:
+            continue
+        d.set(pos, str(at + round((int(d.get(pos)) - old_at) * n / old_n)))
+        d.set(size, str(round(int(d.get(size)) * n / old_n)))
+    zone.set(pos, str(at))
+    zone.set(size, str(n))
+
+
+def relay_flow(flow, span) -> None:
+    """Children of a tiled flow follow each other and share `span` by their sizes.
+
+    Tableau lays a flow this way itself; the stored pixels must agree, otherwise the frame
+    draws gaps and overlaps that Tableau does not.
+    """
+    kids = flow.findall("zone")
+    if not kids or span is None:
+        return
+    pos, size = ("x", "w") if flow.get("param") == "horz" else ("y", "h")
+    start, end = span
+    fixed = [k for k in kids if k.get("is-fixed") == "true"]
+    room = end - start - sum(int(k.get(size)) for k in fixed)
+    free = sum(int(k.get(size)) for k in kids if k not in fixed) or 1
+    at = start
+    for i, k in enumerate(kids):
+        if k in fixed:
+            n = int(k.get(size))
+        elif i == len(kids) - 1:
+            n = end - at
+        else:
+            n = round(int(k.get(size)) * room / free)
+        _shift_axis(k, pos, size, at, n)
+        at += n
+
+
+def fill_flow_gaps(dash) -> int:
+    """Flows whose children stop short of the end: the last free child takes the rest.
+
+    A zone removed outside Desktop leaves its space empty (hatched in Desktop); the stale
+    `layout-cache` of the stretched zone goes with it.
+    """
+    zones = dash.find("zones")
+    if zones is None:
+        return 0
+    n = 0
+    for flow in zones.iter("zone"):
+        if flow.get("type-v2") != "layout-flow" or not flow.findall("zone"):
+            continue
+        kids = flow.findall("zone")
+        free = [k for k in kids if k.get("is-fixed") != "true"]
+        if not free:
+            continue
+        pos, size = ("x", "w") if flow.get("param") == "horz" else ("y", "h")
+        f0, fn = int(flow.get(pos)), int(flow.get(size))
+        start, end = _flow_span(flow)
+        gap = f0 + fn - (start - f0) - end
+        if gap <= max(200, fn // 100):
+            continue
+        last = free[-1]
+        after = kids[kids.index(last) + 1:]
+        _shift_axis(last, pos, size, int(last.get(pos)), int(last.get(size)) + gap)
+        for k in after:
+            _shift_axis(k, pos, size, int(k.get(pos)) + gap, int(k.get(size)))
+        cache = last.find("layout-cache")
+        if cache is not None:
+            last.remove(cache)
+        n += 1
+    return n
+
+
+def drop_zone(zone) -> None:
+    """Remove a zone; in a flow its neighbours take the space, as in Tableau."""
+    parent = zone.getparent()
+    flow = parent.get("type-v2") == "layout-flow"
+    span = _flow_span(parent) if flow else None
+    parent.remove(zone)
+    if flow:
+        relay_flow(parent, span)
+
+
+def _set_card_title(ws, param: str, title: str) -> None:
+    table = ws.find("table")
+    holder = table.find("style")
+    if holder is None:
+        holder = etree.SubElement(table, "style")
+    rule = next((r for r in holder.findall("style-rule")
+                 if r.get("element") == "quick-filter"), None)
+    if rule is None:
+        rule = etree.SubElement(holder, "style-rule")
+        rule.set("element", "quick-filter")
+    for f in rule.findall("format"):
+        if f.get("attr") == "title" and f.get("field") == param:
+            rule.remove(f)
+    fmt = etree.SubElement(rule, "format")
+    fmt.set("attr", "title")
+    fmt.set("field", param)
+    fmt.set("value", title)
+    etree.SubElement(etree.SubElement(fmt, "formatted-text"), "run").text = title
+
+
+def _filter_ref(root, ws, field: str) -> str:
+    cols = [f.get("column") for f in ws.iter("filter") if f.get("column")]
+    if field in cols:
+        return field
+    want = {field, f"[{field}]"} | {"[" + n + "]" for n in field_names(root, field)}
+    for col in cols:
+        inner = re.findall(r"\[([^\]]+)\]", col)[-1]
+        parts = inner.split(":")
+        name = ":".join(parts[1:-1]) if len(parts) >= 3 else inner.lstrip(":")
+        if name in {w.strip("[]") for w in want}:
+            return col
+    return ""
+
+
+def add_filter_card(root, dashboard: str, sheet: str, field: str, after_id: str,
+                    title: str = "") -> dict:
+    """A filter card next to control `after_id`, sized and styled like it.
+
+    The sheet must already filter the field: a card without a filter on its sheet shows
+    nothing. In a flow the row is laid out again, as Tableau does on insertion.
+    """
+    dash = next((d for d in root.iter("dashboard") if d.get("name") == dashboard), None)
+    if dash is None or dash.find("zones") is None:
+        raise ValueError(f"dashboard {dashboard!r} is not in the workbook")
+    ws = next((w for w in root.iter("worksheet") if w.get("name") == sheet), None)
+    if ws is None:
+        raise ValueError(f"worksheet {sheet!r} is not in the workbook")
+    ref = _filter_ref(root, ws, field)
+    if not ref:
+        raise ValueError(f"sheet {sheet!r} has no filter on {field!r}; add the filter first")
+    zones = dash.find("zones")
+    anchor = next((z for z in zones.iter("zone") if z.get("id") == str(after_id)), None)
+    if anchor is None or anchor.get("type-v2") not in ("filter", "paramctrl"):
+        raise ValueError(f"zone {after_id!r} is not a control on {dashboard!r}")
+    if title:
+        _set_card_title(ws, ref, title)
+    have = next((z for z in zones.iter("zone") if z.get("type-v2") == "filter"
+                 and z.get("param") == ref and z.get("name") == sheet), None)
+    if have is not None:
+        return {"zone_id": have.get("id"), "card": ref, "added": False, "title": title}
+    parent = anchor.getparent()
+    flow = parent.get("type-v2") == "layout-flow"
+    if not flow:
+        raise ValueError("the anchor sits in layout-basic: coordinates there are absolute, "
+                         "place the card in a flow")
+    span = _flow_span(parent)
+    card = copy.deepcopy(anchor)
+    for k in ("custom-title", "show-apply", "values", "mode"):
+        if k in card.attrib and anchor.get("type-v2") != "filter":
+            del card.attrib[k]
+    for ch in card.findall("formatted-text"):
+        card.remove(ch)
+    nid = 1 + max((int(z.get("id")) for z in dash.iter("zone")
+                   if (z.get("id") or "").isdigit()), default=0)
+    card.set("id", str(nid))
+    card.set("type-v2", "filter")
+    card.set("name", sheet)
+    card.set("param", ref)
+    card.attrib.pop("custom-title", None)
+    card.set("mode", "checkdropdown")
+    card.set("values", card.get("values") or "relevant")
+    anchor.addnext(card)
+    relay_flow(parent, span)
+    return {"zone_id": str(nid), "card": ref, "added": True, "title": title}
 
 
 def window_uuid(root, dash_name: str) -> str:

@@ -237,6 +237,9 @@ def fmt_mask(v, mask: str) -> str | None:
     if f is None or not mask:
         return None
     m = re.sub(r"![A-Za-z]{2,3}(?:_[A-Za-z]{2,4})?!", "", mask)
+    if m in ("N", "n"):                                   # Number (Standard): the automatic look
+        num = f"{f:,.0f}" if float(f).is_integer() or abs(f) >= 100 else f"{f:,.2f}"
+        return num.replace(",", _SEP["group"]) if _SEP["group"] != "," else num
     lc = re.fullmatch(r"C(\d{4,5})%", m)
     if lc:
         return _fmt_currency_lcid(f, int(lc.group(1)))
@@ -1414,8 +1417,50 @@ def total_label(ws) -> str:
     return "Grand Total"
 
 
+def member_order(ws, ref: str, keys) -> list:
+    """Members of a dimension in the sheet's own order (`<view><manual-sort>`), else alphabetical."""
+    for ms in (ws.findall("table/view/manual-sort") if ws is not None else ()):
+        if _inst_key(_ref_tail(ms.get("column"))) == _inst_key(ref):
+            order = [(b.text or "").strip('"') for b in ms.iter("bucket")]
+            rank = {v: i for i, v in enumerate(order)}
+            return sorted(keys, key=lambda k: (rank.get(k, len(order)), k))
+    return sorted(keys)
+
+
+def mark_opacity(ws) -> float:
+    for p in (ws.iter("pane") if ws is not None else ()):
+        for f in p.iter("format"):
+            if f.get("attr") == "opacity" and _num(f.get("value")) is not None:
+                return max(0.0, min(1.0, _num(f.get("value"))))
+    return 1.0
+
+
+def mark_label_color(ws) -> str | None:
+    """The value text colour the author set on the marks (pane `label` rule), if any."""
+    for p in (ws.iter("pane") if ws is not None else ()):
+        for sr in p.iter("style-rule"):
+            if sr.get("element") != "label":
+                continue
+            for f in sr.findall("format"):
+                if f.get("attr") == "color" and _hex(f.get("value")):
+                    return _hex(f.get("value"))
+    return None
+
+
+def _fill_css(ws, col: str) -> str:
+    """A filled cell: the mark colour at the pane opacity over the sheet background."""
+    op = mark_opacity(ws)
+    bg = _mix(sheet_background(ws) or "#ffffff", col[:7], op) if op < 1.0 else col[:7]
+    ink = mark_label_color(ws) or ("#ffffff" if _lum(bg) < 0.55 else INK)
+    return f"background:{bg};color:{ink}"
+
+
 def _render_crosstab(ws, rows, ndims: int, refs: list, caps: list, masks: list,
-                     fit: str = "", sized: bool = False, mref: str = "") -> str | None:
+                     fit: str = "", sized: bool = False, mref: str = "",
+                     mrefs: list | None = None, totals: list | None = None,
+                     total_keep: list | None = None, root=None) -> str | None:
+    """A dimension across the columns; with `[:Measure Names]` nested under it, one column per
+    measure under each member and a second header row of measure names."""
     cols = _shelf_refs(ws, "cols")
     ci = [i for i in range(min(ndims, len(refs))) if refs[i] in cols
           and re.search(r":(nk|ok)(:\d+)?\]$", refs[i])]
@@ -1423,13 +1468,17 @@ def _render_crosstab(ws, rows, ndims: int, refs: list, caps: list, masks: list,
         return None
     c = ci[0]
     ri = [i for i in range(ndims) if i != c]
+    nm = len(rows[0]) - ndims
+    multi = nm > 1 and "[:Measure Names]" in cols
+    ms = list(range(nm)) if multi else [0]
+    mrefs = list(mrefs or [mref])
     fmt = ""
     for sr in ws.iter("style-rule"):
         for f in sr.findall("format"):
             if f.get("attr") == "text-format" and (f.get("field") or "").endswith(refs[c]):
                 fmt = fmt or f.get("value") or ""
     fmt = fmt or ((masks or [])[c] if c < len(masks or []) else "")
-    keys = sorted({str(r[c]) for r in rows})
+    keys = member_order(ws, refs[c], {str(r[c]) for r in rows})
     lab = {k: fmt_dim(k, refs[c], fmt) for k in keys}
 
     def rlab(i, v):
@@ -1442,34 +1491,65 @@ def _render_crosstab(ws, rows, ndims: int, refs: list, caps: list, masks: list,
         if rk not in grid:
             grid[rk] = {}
             order.append(rk)
-        grid[rk][str(r[c])] = r[ndims]
-    mk = (masks or [""] * (ndims + 1))[ndims] if len(masks or []) > ndims else ""
-    cap = caps[ndims] if len(caps) > ndims else ""
+        grid[rk][str(r[c])] = r[ndims:]
+    mk = [(masks or [])[ndims + j] if ndims + j < len(masks or []) else "" for j in range(nm)]
+    cap = [caps[ndims + j] if ndims + j < len(caps) else "" for j in range(nm)]
+    mr = [mrefs[j] if j < len(mrefs) else "" for j in range(nm)]
     rt, ct, top = grand_totals(ws)
-    add = additive(mref)
+    ct = ct and not multi
+    add = additive(mr[0])
     rules = style_rules(ws)
     hcss = header_css(ws, refs[c], rules)
+    ncss = header_css(ws, "[:Measure Names]", rules)
     rcss = {i: header_css(ws, refs[i] if i < len(refs) else "", rules) for i in ri}
     flcss = field_label_css(ws, rules)
-    vcss = text_css(ws, "cell", mref, rules)
-    head = [(caps[i] if i < len(caps) and shown else "", "lbl", flcss) for i in ri] + \
-        [(lab[k], "lbl num", hcss) for k in keys] + ([(total_label(ws), "lbl num")] if ct and add else [])
+    vcss = [text_css(ws, "cell", m, rules) for m in mr]
+    ccolor = cell_colors(ws, root, rows, ndims, mr) if multi else {}
+    corner = [(caps[i] if i < len(caps) and shown else "", "lbl", flcss) for i in ri]
+    if multi:
+        top_row = [("", "lbl", "")] * len(ri) + [(lab[k], "lbl num", hcss, len(ms)) for k in keys]
+        head = corner + [(cap[j], "lbl num", ncss) for _k in keys for j in ms]
+    else:
+        top_row = None
+        head = corner + [(lab[k], "lbl num", hcss) for k in keys] + \
+            ([(total_label(ws), "lbl num")] if ct and add else [])
 
-    def tot(vals):
+    def cell(v, j):
+        sty = vcss[j]
+        if ndims + j in ccolor:
+            spec, lo, hi, fill = ccolor[ndims + j]
+            c_ = measure_color(spec, v, lo, hi)
+            if c_:
+                sty = ";".join(x for x in (sty, _fill_css(ws, c_) if fill else f"color:{c_}") if x)
+        return (_fmt(v, cap[j], mk[j]), "lbl num" if multi else "num", sty)
+
+    def tot(vals, j=0):
         xs = [_num(v) for v in vals if _num(v) is not None]
-        return _fmt(sum(xs), cap, mk) if xs else ""
+        return _fmt(sum(xs), cap[j], mk[j]) if xs else ""
+    empty = [None] * nm
     body = [[(rlab(i, v), "lbl", rcss[i]) for i, v in zip(ri, rk)] +
-            [(_fmt(grid[rk].get(k), cap, mk), "num", vcss) for k in keys] +
-            ([(tot(grid[rk].values()), "num", "font-weight:600")] if ct and add else [])
+            [cell(grid[rk].get(k, empty)[j], j) for k in keys for j in ms] +
+            ([(tot(v[0] for v in grid[rk].values()), "num", "font-weight:600")] if ct and add else [])
             for rk in order[:300]]
-    if rt and add and ri:
-        gt = [(total_label(ws), "lbl", "font-weight:600")] + [("", "lbl", "")] * (len(ri) - 1) + \
-            [(tot(grid[rk].get(k) for rk in order), "num", "font-weight:600") for k in keys] + \
-            ([(tot(v for rk in order for v in grid[rk].values()), "num", "font-weight:600")] if ct else [])
+    tmap = {str(t[0]): t[1:] for t in totals or []} if list(total_keep or []) == [c] else {}
+    if rt and ri and (tmap or any(additive(mr[j]) for j in ms)):
+        bold = "font-weight:600"
+        gt = [(total_label(ws), "lbl", bold)] + [("", "lbl", "")] * (len(ri) - 1)
+        for k in keys:
+            for j in ms:
+                if tmap:
+                    v = (tmap.get(k) or empty)[j]
+                    t_ = cell(v, j)
+                    gt.append((t_[0], t_[1], ";".join(x for x in (t_[2], bold) if x)))
+                else:
+                    gt.append((tot(grid[rk].get(k, empty)[j] for rk in order) if additive(mr[j])
+                               else "", "num", bold))
+        if ct and add:
+            gt.append((tot(v[0] for rk in order for v in grid[rk].values()), "num", bold))
         body = [gt] + body if top else body + [gt]
     kinds = [("h", refs[i] if i < len(refs) else "") for i in ri] + \
         [("v", "") for _ in range(len(head) - len(ri))]
-    return _table_html(head, body, kinds if sized else None, ws, fit)
+    return _table_html(head, body, kinds if sized else None, ws, fit, head_top=top_row)
 
 
 def grand_totals(ws) -> tuple:
@@ -1671,14 +1751,20 @@ def border_css(ws, elements: tuple) -> str:
 
 
 def _table_html(head: list | None, body: list, kinds: list | None = None, ws=None,
-                fit: str = "", zone_w: float = 0.0) -> str:
+                fit: str = "", zone_w: float = 0.0, head_top: list | None = None) -> str:
+    """`head_top`: an upper header row of `(text, cls, css, colspan)` over `head`."""
     hh = head_height(ws, _shelf_refs(ws, "cols")) if ws is not None else None
     clamp = f" style='-webkit-line-clamp:{max(2, int((hh - 4) / 15.3))}'" if hh else ""
     hb = border_css(ws, ("header",))
-    th = "".join(f"<th class='{h[1]}'"
-                 f"{(' style=' + chr(39) + hb + (h[2] if len(h) > 2 and h[2] else '') + chr(39)) if hb or (len(h) > 2 and h[2]) else ''}>"
-                 f"<div class='lbl h2'{clamp}>{_esc(h[0])}</div></th>" for h in (head or []))
-    thead = (f"<thead><tr{(' style=' + chr(39) + f'height:{hh:.0f}px' + chr(39)) if hh else ''}>{th}</tr></thead>"
+
+    def ths(hs):
+        return "".join(f"<th class='{h[1]}'"
+                       f"{(' colspan=' + chr(39) + str(h[3]) + chr(39)) if len(h) > 3 and h[3] > 1 else ''}"
+                       f"{(' style=' + chr(39) + hb + (h[2] if len(h) > 2 and h[2] else '') + chr(39)) if hb or (len(h) > 2 and h[2]) else ''}>"
+                       f"<div class='lbl h2'{clamp}>{_esc(h[0])}</div></th>" for h in (hs or []))
+    trh = f"<tr{(' style=' + chr(39) + f'height:{hh:.0f}px' + chr(39)) if hh else ''}>"
+    upper = f"{trh}{ths(head_top)}</tr>" if head_top else ""
+    thead = (f"<thead>{upper}{trh}{ths(head)}</tr></thead>"
              if head and any(str(h[0]).strip() for h in head) else "")
     rh = row_height(ws)
     hcss = (f"height:{rh:.0f}px;" if rh else "") + border_css(ws, ("cell", "pane"))
@@ -1741,7 +1827,10 @@ def cell_colors(ws, root, rows: list, ndims: int, mrefs: list) -> dict:
 def _render_table(rows, ndims: int, captions: list, masks: list | None = None,
                   heads: list | None = None, tint: list | None = None,
                   refs: list | None = None, ccolor: dict | None = None,
-                  ws=None, fit: str = "", sized: bool = False, mrefs: list | None = None) -> str:
+                  ws=None, fit: str = "", sized: bool = False, mrefs: list | None = None,
+                  totals: list | None = None) -> str:
+    """`totals`: the grand total row computed by the source (measures only); without it a total
+    is drawn only for additive measures, as a sum of the rows."""
     heads = captions if heads is None else heads
     n = len(rows[0]) if rows else len(heads)
     rules = style_rules(ws)
@@ -1763,20 +1852,31 @@ def _render_table(rows, ndims: int, captions: list, masks: list | None = None,
                 spec, lo, hi, fill = ccolor[i]
                 c_ = measure_color(spec, v, lo, hi)
                 if c_:
-                    sty = (f"background:{c_};color:{'#ffffff' if _lum(c_) < 0.55 else INK}"
-                           if fill else f"color:{c_}")
+                    sty = _fill_css(ws, c_) if fill else f"color:{c_}"
             base = ccss[i] if i < len(ccss) else ""
             tds.append((shown, cls, ";".join(x for x in (base, sty) if x)))
         body.append(tds)
     rt, _ct, top = grand_totals(ws)
-    if rt and rows and ndims and mrefs and any(additive(m) for m in mrefs):
+    given = (totals or [None])[0] if totals and len(totals) == 1 and \
+        len(totals[0]) == n - ndims else None
+    if rt and rows and ndims and mrefs and (given or any(additive(m) for m in mrefs)):
         gt = [(total_label(ws), "lbl", "font-weight:600")] + [("", "lbl", "")] * (ndims - 1)
         for i in range(ndims, n):
             m = mrefs[i - ndims] if i - ndims < len(mrefs) else ""
-            xs = [_num(r[i]) for r in rows if _num(r[i]) is not None]
             mk = (masks or [""] * n)[i] if masks and i < len(masks) else ""
-            gt.append((_fmt(sum(xs), captions[i] if i < len(captions) else "", mk)
-                       if additive(m) and xs else "", "lbl num", "font-weight:600"))
+            cap = captions[i] if i < len(captions) else ""
+            sty = "font-weight:600"
+            if given:
+                v = given[i - ndims]
+                if ccolor and i in ccolor:
+                    spec, lo, hi, fill = ccolor[i]
+                    c_ = measure_color(spec, v, lo, hi)
+                    if c_:
+                        sty += ";" + (_fill_css(ws, c_) if fill else f"color:{c_}")
+                gt.append((_fmt(v, cap, mk), "lbl num", sty))
+                continue
+            xs = [_num(r[i]) for r in rows if _num(r[i]) is not None]
+            gt.append((_fmt(sum(xs), cap, mk) if additive(m) and xs else "", "lbl num", sty))
         body = [gt] + body if top else body + [gt]
     kinds = [("h", (refs or [""] * n)[i] if i < len(refs or []) else "") if i < ndims else ("v", "")
              for i in range(n)] if sized else None
@@ -3295,6 +3395,9 @@ def measure_order(root, ws, d: dict) -> dict:
     out["mrefs"] = [mr[k] for k in perm]
     if len(d.get("amasks") or []) == len(mr):
         out["amasks"] = [d["amasks"][k] for k in perm]
+    nk = len(d.get("total_keep") or [])
+    out["totals"] = [list(t[:nk]) + [t[nk + k] for k in perm] for t in d.get("totals") or []
+                     if len(t) == nk + len(mr)]
     return out
 
 
@@ -3448,7 +3551,9 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                 elif kind == "table":
                     body = _render_crosstab(ws, rows, ndims, d.get("refs") or [], caps, masks,
                                             fits.get(z.name, "standard"), sized=True,
-                                            mref=(d.get("mrefs") or [""])[0]) \
+                                            mref=(d.get("mrefs") or [""])[0],
+                                            mrefs=d.get("mrefs") or [], totals=d.get("totals"),
+                                            total_keep=d.get("total_keep"), root=root) \
                         if ws is not None else None
                     if not body:
                         t_ = _table_view(ws, root, rows, ndims, d.get("refs") or [], caps, masks)
@@ -3456,7 +3561,9 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                                              refs=t_[6], ccolor=cell_colors(ws, root, t_[0], t_[1],
                                                                             d.get("mrefs") or []),
                                              ws=ws, fit=fits.get(z.name, "standard"), sized=True,
-                                             mrefs=d.get("mrefs") or [])
+                                             mrefs=d.get("mrefs") or [],
+                                             totals=d.get("totals") if not d.get("total_keep")
+                                             else None)
                 elif kind == "line":
                     ax_ = mrefs_[-1] if mrefs_ else ""
                     am_ = dict(zip(d.get("mrefs") or [], d.get("amasks") or [])).get(ax_, "")
@@ -3660,6 +3767,8 @@ def sheet_data(path: str, limit: int = 300) -> dict:
                         "mrefs": list(getattr(r, "measure_refs", []) or []),
                         "amasks": [axis_mask(wss.get(r.sheet), m, by_name)
                                    for m in (getattr(r, "measure_refs", []) or [])],
+                        "totals": [list(x) for x in (getattr(r, "totals", None) or [])],
+                        "total_keep": list(getattr(r, "total_keep", None) or []),
                         "status": r.status,
                         "note": "" if r.status == "ok" else f"{r.status}: {r.note[:60]}"}
     return out

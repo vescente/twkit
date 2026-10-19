@@ -270,16 +270,24 @@ def configure_worksheet_style(worksheet_name: str, background_color: str | None 
                               hide_row_field_labels: bool = False, disable_tooltip: bool = False,
                               label_formats: list[dict] | None = None,
                               cell_formats: list[dict] | None = None,
-                              header_formats: list[dict] | None = None) -> str:
+                              header_formats: list[dict] | None = None,
+                              worksheet_formats: list[dict] | None = None,
+                              mark_formats: list[dict] | None = None,
+                              mark_label_formats: list[dict] | None = None) -> str:
     """Sheet formatting: background, axes, grid, zero line, borders, bands, field labels,
-    a row header to hide, tooltips off, label/cell/header formats (`[{"font-size": "9"}]`)."""
+    a row header to hide, tooltips off, label/cell/header/worksheet formats (`[{"font-size": "9"}]`).
+
+    A format item may carry `field` (caption, `Measure Names` or a reference) and `scope`:
+    `{"field": "Metric", "background-color": "#484848"}`. `mark_formats` (opacity, size) and
+    `mark_label_formats` (color of the value text) apply to every pane."""
     return _run(lambda: current().configure_worksheet_style(
         worksheet_name, background_color=background_color, hide_axes=hide_axes,
         hide_gridlines=hide_gridlines, hide_zeroline=hide_zeroline, hide_borders=hide_borders,
         hide_band_color=hide_band_color, hide_row_label=hide_row_label,
         hide_col_field_labels=hide_col_field_labels, hide_row_field_labels=hide_row_field_labels,
         disable_tooltip=disable_tooltip, label_formats=label_formats, cell_formats=cell_formats,
-        header_formats=header_formats))
+        header_formats=header_formats, worksheet_formats=worksheet_formats,
+        mark_formats=mark_formats, mark_label_formats=mark_label_formats))
 
 
 @server.tool()

@@ -219,10 +219,7 @@ def bind_parameter(ws, param_col) -> None:
     view = ws.find("table/view")
     dss = view.find("datasources")
     if not any(d.get("name") == "Parameters" for d in dss):
-        d = etree.Element("datasource")
-        d.set("caption", "Parameters")
-        d.set("name", "Parameters")
-        dss.insert(0, d)
+        etree.SubElement(dss, "datasource").set("name", "Parameters")    # the first one is primary
     dep = view.find("datasource-dependencies[@datasource='Parameters']")
     if dep is None:
         dep = etree.Element("datasource-dependencies")
