@@ -361,6 +361,8 @@ def r12_orphan_sheets(b: Book) -> list[Violation]:
     if not dashboards:
         return []
     on_board = {z.get("name") for d in dashboards for z in d.iter("zone") if z.get("name")}
+    on_board |= {m.group(1) for r in b.root.iter("run")
+                 for m in re.finditer(r'<Sheet name="([^"]+)"', r.text or "")}
     orphans = sorted(w.get("name") for w in _worksheets(b)
                      if w.get("name") and w.get("name") not in on_board)
     if not orphans:

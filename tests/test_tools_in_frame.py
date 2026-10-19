@@ -74,6 +74,10 @@ VISIBLE = [
     ("edit_zone_fit", dict(dashboard="Overview", sheets="Table", mode="stretch"), []),
     ("edit_zone_style", dict(dashboard="Overview", sheets="Bars", background="#fff3e0"), []),
     ("edit_table_style", dict(sheets="Table", size="12"), []),
+    ("edit_share_filters", dict(source="Bars", targets="Table", fields="product"), [FILTER]),
+    ("edit_hide_header", dict(sheet="Bars", fields="country"), []),
+    ("edit_sheet_title", dict(sheet="Bars", text="Sales by product"),
+     [("edit_show_zone_title", dict(dashboard="Overview", sheets="Bars", show=True))]),
     ("edit_page_background", dict(dashboards="Overview", color="#fff3e0"), []),
     ("edit_remove_zones", dict(dashboard="Overview", ids="@PARAMZONE"), []),
     (*FILTER, []),
@@ -100,6 +104,7 @@ VISIBLE = [
 ]
 NOT_IN_FRAME = {
     "edit_folder_canon": "data pane folders",
+    "edit_viz_in_tooltip": "acts on hover; the tooltip sheet is drawn on its own",
     "edit_fit_to_extract": "data source mapping",
     "edit_to_live_sql": "connection",
     "edit_drop_fields": "fields no sheet uses",
@@ -288,3 +293,18 @@ def test_table_style_header_band_fills_column_headers(book):
              for f in ws.findall("table/style/style-rule[@element='header']/format")
              if f.get("attr") == "background-color" and f.get("field")}
     assert ":Measure Names]" in fills and fills[":Measure Names]"] == "#484848"
+
+
+def test_viz_in_tooltip_and_shared_filter(book):
+    p = _state(book, "vit", [FILTER, ("edit_share_filters", dict(source="Bars", targets="Table",
+                                                                  fields="product")),
+                             ("edit_viz_in_tooltip", dict(sheet="Bars", tooltip_sheet="Table",
+                                                          title="By product"))])
+    root = safexml.from_twbx(p)
+    groups = {w.get("name"): [f.get("filter-group") for f in w.iter("filter")
+                              if f.get("column", "").endswith("[none:product:nk]")]
+              for w in root.iter("worksheet") if w.get("name") in ("Bars", "Table")}
+    assert groups["Bars"] and groups["Bars"] == groups["Table"] and groups["Bars"][0]
+    runs = [r.text for w in root.iter("worksheet") if w.get("name") == "Bars"
+            for r in w.iter("run")]
+    assert any(t and t.startswith('<Sheet name="Table"') and 'filter="<All Fields>"' in t for t in runs)

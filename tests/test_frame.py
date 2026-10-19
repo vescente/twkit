@@ -161,3 +161,17 @@ def test_custom_tooltip_is_shown_on_hover_with_first_mark_values():
 def test_standard_number_mask_is_not_printed_as_a_prefix():
     assert FR._fmt(1320, "Reg count", "N") == "1,320"
     assert FR._fmt(16139.0, "", "N") == "16,139"
+
+
+def test_dimension_sorted_by_itself_desc_flips_inside_outer_member():
+    from twkit.frame import nest_self_order
+    ws = etree.fromstring(
+        "<worksheet><table><view><single-value-per-nest-shelf-sorts>"
+        "<single-value-per-nest-shelf-sort dimension-to-sort='[ds].[none:d:ok]' direction='DESC' "
+        "is-on-innermost-dimension='true' measure-to-sort-by='[ds].[none:d:ok]' shelf='rows'/>"
+        "</single-value-per-nest-shelf-sorts></view></table></worksheet>")
+    rows = [["A", "2026-10-01", 1], ["A", "2026-10-02", 2], ["B", "2026-10-01", 3],
+            ["B", "2026-10-03", 4]]
+    got = nest_self_order(ws, rows, 2, ["[none:g:nk]", "[none:d:ok]"])
+    assert [r[2] for r in got] == [2, 1, 4, 3]
+    assert nest_self_order(ws, rows, 2, ["[none:g:nk]", "[none:x:ok]"]) == rows

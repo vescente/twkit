@@ -598,3 +598,21 @@ def test_r44_parameters_listed_first_drops_the_sheet_fields():
     assert r44_parameters_as_primary(book(["federated.1", "Parameters"])) == []
     v = r44_parameters_as_primary(book(["Parameters", "federated.1"]))
     assert len(v) == 1 and v[0].severity == ERROR
+
+
+def test_r12_viz_in_tooltip_sheet_is_not_orphan():
+    from lxml import etree
+
+    from twkit import safexml
+    from twkit.lint import Book, r12_orphan_sheets
+
+    xml = """<workbook><worksheets>
+      <worksheet name='Main'><table><panes><pane><customized-tooltip><formatted-text>
+        <run>&lt;Sheet name="Tip" maxwidth="300" maxheight="200" filter="&lt;All Fields&gt;"&gt;</run>
+      </formatted-text></customized-tooltip></pane></panes></table></worksheet>
+      <worksheet name='Tip'/><worksheet name='Lost'/>
+    </worksheets><dashboards><dashboard name='D'><zones><zone name='Main'/></zones></dashboard>
+    </dashboards></workbook>"""
+    root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
+    v = r12_orphan_sheets(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False))
+    assert len(v) == 1 and "(Lost)" in v[0].message, v

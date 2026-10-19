@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from twkit import blocks as BL
 from twkit import canon as CANON
@@ -1426,6 +1427,54 @@ def register_dimension_tools(server) -> None:
         return _json.dumps({"styled": done, "size": size, "family": family,
                             "bands": (band or ST.BAND_WARM) if bands else None},
                            ensure_ascii=False)
+
+    @server.tool()
+    def edit_share_filters(source: str, targets: str, fields: str) -> str:
+        """Filters of sheet `source` applied to other sheets too ("Apply to selected worksheets").
+
+        The same filter goes into every target under one `filter-group`, so a page card of the
+        source drives all of them: a tooltip sheet, a twin chart. `fields`: captions or names.
+        """
+        try:
+            return _json.dumps(ED.share_filters(
+                get_editor().root, source, [t.strip() for t in targets.split(",") if t.strip()],
+                [f.strip() for f in fields.split(",") if f.strip()]), ensure_ascii=False)
+        except ValueError as exc:
+            return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
+
+    @server.tool()
+    def edit_viz_in_tooltip(sheet: str, tooltip_sheet: str, width: int = 320, height: int = 240,
+                            title: str = "", fields: str = "") -> str:
+        """A sheet shown inside the tooltip of `sheet` (Viz in Tooltip), filtered by the hovered
+        mark: all its fields, or `fields` (comma-separated references). Hide the tooltip sheet
+        (set_worksheet_hidden) and share the page filters with it (edit_share_filters)."""
+        try:
+            return _json.dumps(ED.viz_in_tooltip(
+                get_editor().root, sheet, tooltip_sheet, width, height, title,
+                [f.strip() for f in fields.split(",") if f.strip()] or None), ensure_ascii=False)
+        except ValueError as exc:
+            return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
+
+    @server.tool()
+    def edit_hide_header(sheet: str, fields: str) -> str:
+        """"Show Header" off for the named fields of a sheet: the axis of a measure or Measure
+        Values, the header of a dimension or Measure Names. `fields`: comma-separated captions."""
+        try:
+            return _json.dumps(ED.hide_headers(
+                get_editor().root, sheet, [f.strip() for f in fields.split(",") if f.strip()]),
+                ensure_ascii=False)
+        except ValueError as exc:
+            return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
+
+    @server.tool()
+    def edit_sheet_title(sheet: str, text: str, size: str = "10", bold: bool = True) -> str:
+        """Worksheet title text. Fields and parameters go in as `<[Parameters].[Parameter 1]>`;
+        `\\n` breaks the line."""
+        root = get_editor().root
+        text = re.sub(r"<(\[[^<>]+\])>", lambda m: f"<{ED.internal_formula(root, m.group(1))}>",
+                      text.replace("\\n", "\n"))
+        n = ED.set_sheet_title(root, sheet, text, size, bold)
+        return _json.dumps({"sheet": sheet, "titled": n}, ensure_ascii=False)
 
     @server.tool()
     def edit_page_background(dashboards: str, color: str = "#ffffff") -> str:

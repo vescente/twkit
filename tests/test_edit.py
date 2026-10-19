@@ -1750,7 +1750,8 @@ def test_top_n_by_internal_name_and_into_slices():
     assert r["ok"], r
     order = next(g for g in root.iter("groupfilter") if g.get("function") == "order")
     assert order.get("expression") == "[Calculation_2]"
-    assert not list(root.iter("slices"))
+    assert [c.text for c in root.iter("column") if c.getparent().tag == "slices"] == [
+        next(root.iter("filter")).get("column")]
     assert ED._order_expression(root, "qty") == "SUM([qty])"
 
 
@@ -2048,3 +2049,69 @@ def test_viewpoint_without_zoom_stays_standard():
     vp.remove(vp.find("zoom"))
     ED.sync_viewpoints(win, dash)
     assert win.find(".//viewpoint").find("zoom") is None
+
+
+def test_formula_captions_become_internal_names():
+    root = _tree("""<workbook><datasources>
+    <datasource name='Parameters'><column name='[Parameter 1]' caption='Metric'/></datasource>
+    <datasource name='ds'>
+      <column name='[Calculation_1]' caption='Players'><calculation formula='COUNTD([user_id])'/></column>
+      <column name='[Calculation_2]' caption='Rank'><calculation formula='RANK([Calculation_1])'/></column>
+    </datasource></datasources>
+    <worksheets><worksheet name='w'><datasource-dependencies datasource='ds'>
+      <column name='[Calculation_2]' caption='Rank'><calculation formula='RANK([Calculation_1])'/></column>
+    </datasource-dependencies></worksheet></worksheets></workbook>""")
+    r = ED.set_formula(root, "Rank", "IF [Parameters].[Metric] = '[Players]' THEN RANK_UNIQUE([Players]) END")
+    want = "IF [Parameters].[Parameter 1] = '[Players]' THEN RANK_UNIQUE([Calculation_1]) END"
+    assert r["after"] == want, r
+    assert [c.get("formula") for c in root.iter("calculation")
+            if "RANK_UNIQUE" in c.get("formula")] == [want, want]
+
+
+_VIT = """<workbook><datasources><datasource name='ds'>
+  <column caption='Date' name='[Calculation_1]' datatype='date' role='dimension' type='ordinal'>
+    <calculation class='tableau' formula='[event_date]'/></column>
+  </datasource></datasources><worksheets>
+  <worksheet name='T'><table><view><datasources><datasource name='ds'/></datasources>
+    <datasource-dependencies datasource='ds'/></view>
+    <panes><pane><mark class='Automatic'/><encodings><text column='[ds].[Multiple Values]'/></encodings>
+    </pane></panes>
+    <rows>[ds].[none:Calculation_1:ok]</rows><cols>[ds].[:Measure Names]</cols></table></worksheet>
+  <worksheet name='Tip'><table><view><datasources><datasource name='ds'/></datasources></view>
+    <panes><pane/></panes><rows>([ds].[:Measure Names] / [ds].[none:b:nk])</rows>
+    <cols>[ds].[Multiple Values]</cols></table></worksheet>
+</worksheets></workbook>"""
+
+
+def test_viz_in_tooltip_keeps_default_tooltip_text():
+    root = etree.fromstring(_VIT)
+    ED.viz_in_tooltip(root, "T", "Tip", 380, 260)
+    ED.viz_in_tooltip(root, "T", "Tip", 380, 260)
+    runs = [r.text for r in root.find(".//worksheet[@name='T']").iter("run")]
+    assert runs[:3] == ["Date: ", "<[ds].[none:Calculation_1:ok]>", "Æ\n"], runs
+    assert runs[3:6] == ["<[ds].[:Measure Names]>: ", "<[ds].[Multiple Values]>", "Æ\n"], runs
+    assert [t for t in runs if t.startswith("<Sheet")] == [
+        '<Sheet name="Tip" maxwidth="380" maxheight="260" filter="<All Fields>">']
+
+
+def test_viz_in_tooltip_appends_to_own_text():
+    root = etree.fromstring(_VIT)
+    pane = root.find(".//worksheet[@name='T']//pane")
+    pane.append(etree.fromstring(
+        "<customized-tooltip><formatted-text><run>Own</run></formatted-text></customized-tooltip>"))
+    ED.viz_in_tooltip(root, "T", "Tip")
+    runs = [r.text for r in pane.iter("run")]
+    assert runs[0] == "Own" and runs[1] == "Æ\n" and runs[2].startswith('<Sheet name="Tip"')
+
+
+def test_hide_headers_axis_for_measure_values_label_for_measure_names():
+    root = etree.fromstring(_VIT)
+    r = ED.hide_headers(root, "Tip", ["Measure Values", "Measure Names", "nope"])
+    assert r["hidden"] == ["[ds].[Multiple Values]", "[ds].[:Measure Names]"], r
+    assert r["not_on_rows_or_columns"] == ["nope"]
+    tip = root.find(".//worksheet[@name='Tip']")
+    axis = tip.find(".//style-rule[@element='axis']/format")
+    assert (axis.get("class"), axis.get("scope"), axis.get("value")) == ("0", "cols", "false")
+    label = tip.find(".//style-rule[@element='label']/format")
+    assert label.get("field") == "[ds].[:Measure Names]" and label.get("class") is None
+    assert len([f for f in tip.iter("format") if f.get("field") == "[ds].[none:b:nk]"]) == 0

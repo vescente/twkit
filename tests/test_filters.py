@@ -251,3 +251,29 @@ def test_tooltip_takes_a_csv_dimension_as_is_not_summed():
         assert ED.set_tooltip(root, "Bars", [{"field": "product"}])["ok"]
         runs = "".join(r.text or "" for r in root.iter("run"))
         assert "[none:product:nk]" in runs and "sum:product" not in runs, runs
+
+
+def test_range_filter_on_table_calc_uses_user_instance():
+    root = _root()
+    ds = root.find("datasources/datasource")
+    ds.append(etree.fromstring(
+        "<column caption='Rank' datatype='integer' name='[Calculation_9]' role='measure' "
+        "type='quantitative'><calculation class='tableau' formula='RANK_UNIQUE(SUM([GGR]))'/>"
+        "</column>"))
+    res = ED.range_filter(root, "Sheet", "Rank", 1, 10)
+    assert res["ok"] and res["field"] == "[federated.x].[usr:Calculation_9:qk]", res
+    dep = root.find(".//datasource-dependencies")
+    inst = [ci for ci in dep.findall("column-instance") if ci.get("name") == "[usr:Calculation_9:qk]"]
+    assert inst and inst[0].get("derivation") == "User"
+    assert any(c.get("name") == "[Calculation_9]" for c in dep.findall("column"))
+
+
+def test_range_top_and_relative_filters_land_in_slices():
+    root = _root()
+    ED.range_filter(root, "Sheet", "GGR", 1, 2)
+    ED.relative_date_filter(root, "Sheet", "dt", period="month", first=-5)
+    ED.top_n_filter(root, "Sheet", "brand", "GGR", 5)
+    view = root.find(".//worksheet/table/view")
+    sl = [c.text for c in view.findall("slices/column")]
+    assert sorted(sl) == sorted(f.get("column") for f in view.findall("filter")), sl
+    assert len(sl) == len(set(sl)) == 3

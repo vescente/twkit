@@ -3226,6 +3226,29 @@ def default_order(ws, rows: list, ndims: int) -> list:
     return sorted(rows, key=lambda r: tuple(key(r[i]) for i in range(min(ndims, len(r)))))
 
 
+def nest_self_order(ws, rows: list, ndims: int, refs: list) -> list:
+    """`<single-value-per-nest-shelf-sort>` of a dimension by itself: DESC flips its natural
+    order inside each outer member (newest date on top)."""
+    if ws is None or not rows:
+        return rows
+
+    def key(v):
+        f = _num(v)
+        return (0, f, "") if f is not None else (1, 0, str(v).lower())
+    for s in ws.findall("table/view/single-value-per-nest-shelf-sorts/"
+                        "single-value-per-nest-shelf-sort"):
+        dim = s.get("dimension-to-sort") or ""
+        if s.get("measure-to-sort-by") != dim or (s.get("direction") or "ASC") != "DESC":
+            continue
+        ref = (re.findall(r"\[[^\]]+\]", dim) or [""])[-1]
+        if ref not in refs[:ndims]:
+            continue
+        i = refs.index(ref)
+        rows = sorted(rows, key=lambda r: key(r[i]), reverse=True)
+        rows = sorted(rows, key=lambda r: tuple(key(r[j]) for j in range(i)))
+    return rows
+
+
 def _render_mlist(rows, ndims: int, captions: list, masks: list, ws=None,
                   refs: list | None = None, fit: str = "", sized: bool = False,
                   mrefs: list | None = None) -> str:
@@ -3472,6 +3495,7 @@ def _page_html(name: str, dash, sheets: dict, data: dict, title: str, root=None,
                 kind = _sheet_kind(ws, rows, ndims, d.get("mrefs"))
                 rows = hide_filtered(ws, rows, d.get("refs") or [])
                 rows = default_order(ws, rows, ndims)
+                rows = nest_self_order(ws, rows, ndims, d.get("refs") or [])
                 rows = computed_order(ws, rows, ndims, d.get("refs") or [], d.get("mrefs") or [])
                 if ws is not None and any(":Measure Names" in r for r in _shelf_refs(ws, "rows")) \
                         and kind in ("table", "card"):

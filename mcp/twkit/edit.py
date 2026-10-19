@@ -345,22 +345,62 @@ def rename_field(root, old: str, new: str) -> int:
     return n
 
 
+def internal_formula(root, formula: str, ds=None) -> str:
+    """Parameters and calculations referenced by caption become their internal names."""
+    sources = root.findall("datasources/datasource")
+    params = next((d for d in sources if d.get("name") == "Parameters"), None)
+
+    def param(m):
+        p = None
+        if params is not None:
+            p = next((c for c in params.findall("column")
+                      if m.group(1) in (c.get("caption"), (c.get("name") or "").strip("[]"))),
+                     None)
+        return f"[Parameters].{p.get('name')}" if p is not None else m.group(0)
+    out = re.sub(r"\[Parameters\]\.\[([^\]]+)\]", param, formula or "")
+    if ds is None:
+        ds = next((d for d in sources if d.get("name") != "Parameters"), None)
+    if ds is None:
+        return out
+    names = {(c.get("name") or "") for c in ds.findall("column")}
+    names |= {f"[{c.get('name')}]" for c in ds.iter("column")
+              if c.getparent() is not None and c.getparent().tag == "columns"}
+    calcs = {f"[{c.get('caption')}]": c.get("name") for c in ds.findall("column")
+             if c.find("calculation") is not None and c.get("caption")}
+
+    def calc(m):
+        tok = m.group(0)
+        if tok in names or tok not in calcs:
+            return tok
+        return calcs[tok]
+
+    parts = re.split(r"('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")", out)
+    return "".join(p if i % 2 else re.sub(r"(?<!\])(?<!\.)\[[^\[\]]+\](?!\.)", calc, p)
+                   for i, p in enumerate(parts))
+
+
 def set_formula(root, calc: str, formula: str) -> dict:
-    """Replace a calculated field's formula as a whole."""
+    """Replace a calculated field's formula as a whole; captions become internal names."""
     want = calc.strip()
-    touched = []
+    hits = []
     for col in root.iter("column"):
         nm = (col.get("name") or "").strip("[]")
         cap = (col.get("caption") or "").strip()
         if nm != want and cap != want:
             continue
+        if col.find("calculation") is not None:
+            hits.append(col)
+    if not hits:
+        raise ValueError(f"calculated field {calc!r} is not in the workbook")
+    home = next((c.getparent() for c in hits
+                 if c.getparent().tag == "datasource"
+                 and c.getparent().get("name") != "Parameters"), None)
+    formula = internal_formula(root, formula, home)
+    touched = []
+    for col in hits:
         node = col.find("calculation")
-        if node is None:
-            continue
         touched.append(node.get("formula") or "")
         node.set("formula", formula)
-    if not touched:
-        raise ValueError(f"calculated field {calc!r} is not in the workbook")
     return {"field": calc, "declarations_edited": len(touched),
             "before": touched[0][:120], "after": formula}
 
@@ -1215,6 +1255,133 @@ def fill_flow_gaps(dash) -> int:
             last.remove(cache)
         n += 1
     return n
+
+
+def _copy_deps(src_ws, dst_ws, refs: list) -> None:
+    """Column declarations and instances the copied refs need on the target sheet."""
+    for ref in refs:
+        m = re.match(r"\[([^\]]+)\]\.\[([^\]]+)\]", ref or "")
+        if not m or m.group(2).startswith(":"):
+            continue
+        ds, inst = m.groups()
+        sdep = src_ws.find(f".//datasource-dependencies[@datasource='{ds}']")
+        ddep = dst_ws.find(f".//datasource-dependencies[@datasource='{ds}']")
+        if sdep is None or ddep is None:
+            continue
+        ci = next((c for c in sdep.findall("column-instance") if c.get("name") == f"[{inst}]"), None)
+        if ci is None:
+            continue
+        col = next((c for c in sdep.findall("column") if c.get("name") == ci.get("column")), None)
+        if col is not None and not any(c.get("name") == col.get("name") for c in ddep.findall("column")):
+            ddep.insert(0, copy.deepcopy(col))
+        if not any(c.get("name") == ci.get("name") for c in ddep.findall("column-instance")):
+            ddep.append(copy.deepcopy(ci))
+
+
+def share_filters(root, source: str, targets: list, fields: list) -> dict:
+    """Filters of `source` applied to `targets` too, as Desktop's "Apply to selected worksheets":
+    the same `<filter>` in every sheet under one `filter-group`, so one page card drives all."""
+    src = _sheet(root, source)
+    if src is None:
+        raise ValueError(f"sheet {source!r} is not in the workbook")
+    dsts = [_sheet(root, t) for t in targets]
+    if any(d is None for d in dsts):
+        raise ValueError(f"sheets not in the workbook: {[t for t, d in zip(targets, dsts) if d is None]}")
+    gid = 1 + max((int(f.get("filter-group")) for f in root.iter("filter")
+                   if (f.get("filter-group") or "").isdigit()), default=0)
+    done, missing = [], []
+    for field in fields:
+        ref = _filter_ref(root, src, field)
+        filt = next((f for f in src.iter("filter") if f.get("column") == ref), None) if ref else None
+        if filt is None:
+            missing.append(field)
+            continue
+        if not filt.get("filter-group"):
+            filt.set("filter-group", str(gid))
+            gid += 1
+        for ws in dsts:
+            view = ws.find("table/view")
+            for old in [f for f in view.findall("filter") if f.get("column") == ref]:
+                view.remove(old)
+            insert_in_order(view, copy.deepcopy(filt), _VIEW_ORDER)
+            _copy_deps(src, ws, [ref])
+            add_slice(view, ref)
+        done.append(ref)
+    return {"shared": done, "not_filtered_on_source": missing}
+
+
+def _instance_column(ref: str) -> str:
+    """`[ds].[none:Calculation_1:ok]` gives `Calculation_1`; a bare column stays as is."""
+    inner = ref.split("].[", 1)[-1].rstrip("]")
+    parts = inner.split(":")
+    return parts[1] if len(parts) >= 3 else inner
+
+
+def _default_tooltip_lines(root, ws) -> list:
+    """Tableau's default tooltip as (label, value) pairs: every header field, then
+    `<Measure Names>: <Measure Values>` and the measures on marks (corpus idiom)."""
+    ds = _ds_name(ws)
+    mn, mv = f"[{ds}].[:Measure Names]", f"[{ds}].[Multiple Values]"
+    refs = [r for tag in ("rows", "cols") for r in shelf_tokens(ws.findtext(f"table/{tag}") or "")]
+    refs += [e.get("column") for enc in ws.iter("encodings") for e in enc
+             if e.get("column") and e.get("column") not in refs]
+    lines, seen = [], set()
+    for ref in refs:
+        if ref in seen or ref in (mn, mv):
+            continue
+        seen.add(ref)
+        col = _instance_column(ref)
+        src = _declared(root, ws, col)
+        cap = (src.get("caption") if src is not None else None) or col
+        lines.append((f"{cap}: ", f"<{ref}>"))
+    if mn in refs:
+        lines.append((f"<{mn}>: ", f"<{mv}>"))
+    return lines
+
+
+def viz_in_tooltip(root, sheet: str, tooltip_sheet: str, width: int = 320, height: int = 240,
+                   title: str = "", fields: list | None = None) -> dict:
+    """A sheet inside the tooltip of `sheet` (Viz in Tooltip), filtered by the hovered mark:
+    `<All Fields>` or the listed field references. The tooltip text stays: an existing one is
+    kept, a default one is written out, the sheet goes below it."""
+    ws, tip = _sheet(root, sheet), _sheet(root, tooltip_sheet)
+    if ws is None or tip is None:
+        raise ValueError(f"no sheet {sheet if ws is None else tooltip_sheet!r}")
+    filt = ",".join(f"<{f}>" for f in fields) if fields else "<All Fields>"
+    tag = (f'<Sheet name="{tooltip_sheet}" maxwidth="{int(width)}" maxheight="{int(height)}" '
+           f'filter="{filt}">')
+    panes = list(ws.iter("pane"))
+    for pane in panes:
+        ct = pane.find("customized-tooltip")
+        if ct is None or ct.find("formatted-text") is None:
+            if ct is not None:
+                pane.remove(ct)
+            ct = etree.Element("customized-tooltip")
+            ft = etree.SubElement(ct, "formatted-text")
+            for label, value in _default_tooltip_lines(root, ws):
+                r = etree.SubElement(ft, "run")
+                r.set("fontcolor", "#787878")
+                r.text = label
+                r = etree.SubElement(ft, "run")
+                r.set("bold", "true")
+                r.text = etree.CDATA(value)
+                etree.SubElement(ft, "run").text = _LB
+            insert_in_order(pane, ct, _PANE_ORDER)
+        ft = ct.find("formatted-text")
+        for old in [r for r in ft.findall("run")
+                    if (r.text or "").startswith(f'<Sheet name="{tooltip_sheet}"')]:
+            ft.remove(old)
+        runs = ft.findall("run")
+        if runs and not (runs[-1].text or "").endswith("\n"):
+            etree.SubElement(ft, "run").text = _LB
+        if title:
+            r = etree.SubElement(ft, "run")
+            r.set("bold", "true")
+            r.text = title
+            etree.SubElement(ft, "run").text = _LB
+        etree.SubElement(ft, "run").text = etree.CDATA(tag)
+    return {"sheet": sheet, "tooltip_sheet": tooltip_sheet, "panes": len(panes), "filter": filt,
+            "tooltip_lines": [(r.text or "") for r in ft.findall("run")] if panes else []}
 
 
 def drop_zone(zone) -> None:
@@ -3077,12 +3244,7 @@ def apply_filter(root, sheets: list, column: str, *, derivation: str = "None",
         g.set(_u("ui-marker"), "enumerate")
 
         insert_in_order(view, filt, _VIEW_ORDER)
-        sl = view.find("slices")
-        if sl is None:
-            sl = etree.Element("slices")
-            insert_in_order(view, sl, _VIEW_ORDER)
-        if not any((c.text or "") == ref for c in sl.findall("column")):
-            etree.SubElement(sl, "column").text = ref
+        add_slice(view, ref)
         put.append(name)
     return {"sheet_count": len(put), "field": column, "sheets": put}
 
@@ -3741,6 +3903,46 @@ def _style_rule(tbl, element: str):
     return rule
 
 
+def _is_axis(ref: str) -> bool:
+    """A continuous header is an axis: a `:qk` instance or Measure Values."""
+    return ref.endswith(":qk]") or ref.endswith("[Multiple Values]")
+
+
+def hide_headers(root, sheet: str, fields: list) -> dict:
+    """"Show Header" off for the named fields only: an axis for a continuous field or Measure
+    Values, a label for a discrete one. Names: caption, internal name, Measure Names/Values."""
+    ws = _sheet(root, sheet)
+    if ws is None:
+        raise ValueError(f"no sheet {sheet!r} in the workbook")
+    tbl = ws.find("table")
+    alias = {"measure names": ":Measure Names", "measure values": "Multiple Values"}
+    hidden, missing = [], []
+    for field in fields:
+        names = field_names(root, alias.get(field.strip().lower(), field.strip()))
+        hits = [(ref, tag) for tag in ("rows", "cols")
+                for ref in shelf_tokens(ws.findtext(f"table/{tag}") or "")
+                if any(mentions(ref, n) for n in names)]
+        if not hits:
+            missing.append(field)
+            continue
+        for ref, tag in hits:
+            element = "axis" if _is_axis(ref) else "label"
+            rule = _style_rule(tbl, element)
+            if any(f.get("attr") == "display" and f.get("field") == ref
+                   for f in rule.findall("format")):
+                continue
+            fmt = etree.SubElement(rule, "format")
+            fmt.set("attr", "display")
+            if element == "axis":
+                fmt.set("class", "0")
+            fmt.set("field", ref)
+            if element == "axis":
+                fmt.set("scope", tag)
+            fmt.set("value", "false")
+            hidden.append(ref)
+    return {"sheet": sheet, "hidden": hidden, "not_on_rows_or_columns": missing}
+
+
 def hide_axes(root, sheets: list) -> int:
     """Sparkline look: measure axes off (`axis` display false) and discrete headers off."""
     want = set(sheets)
@@ -3753,7 +3955,7 @@ def hide_axes(root, sheets: list) -> int:
         for tag in ("rows", "cols"):
             for shelf in ws.iter(tag):
                 for ref in shelf_tokens(shelf.text or ""):
-                    element = "axis" if ref.endswith(":qk]") else "label"
+                    element = "axis" if _is_axis(ref) else "label"
                     rule = _style_rule(tbl, element)
                     if any(f.get("attr") == "display" and f.get("field") == ref
                            for f in rule.findall("format")):
@@ -4548,6 +4750,7 @@ def top_n_filter(root, sheet: str, dimension: str, by: str, count,
     lvl.set(_u("ui-enumeration"), "all")
     lvl.set(_u("ui-marker"), "enumerate")
     insert_in_order(view, filt, _VIEW_ORDER)
+    add_slice(view, col)
     return {"ok": True, "sheet": sheet, "dimension": col, "by_measure": by,
             "count": cnt, "depth_given_as": kind,
             "edge": "top" if d == "DESC" else "bottom"}
@@ -4585,6 +4788,23 @@ def _replace_filter(view, col: str) -> int:
     return dropped
 
 
+def add_slice(view, ref: str) -> None:
+    """Every view filter is listed in `<slices>` (corpus: 979 of 990, all non-categorical)."""
+    sl = view.find("slices")
+    if sl is None:
+        sl = etree.Element("slices")
+        insert_in_order(view, sl, _VIEW_ORDER)
+    if not any((c.text or "") == ref for c in sl.findall("column")):
+        etree.SubElement(sl, "column").text = ref
+
+
+def _aggregates(formula: str) -> bool:
+    """An aggregate or a table calculation: its sheet instance is `usr:`, never `none:`."""
+    from .fields import is_aggregate
+    from .lint import _uses_table_func
+    return is_aggregate(formula) or _uses_table_func(formula)
+
+
 def range_filter(root, sheet: str, field: str, low=None, high=None,
                  context: bool = False) -> dict:
     """A value-range filter (`class="quantitative"`)."""
@@ -4594,7 +4814,15 @@ def range_filter(root, sheet: str, field: str, low=None, high=None,
     view = ws.find("table/view")
     if view is None:
         return {"ok": False, "why": "the sheet has no <view>"}
-    col = _dim_ref(root, ws, field, force="qk")
+    src = _declared(root, ws, field)
+    calc = src.find("calculation") if src is not None else None
+    if calc is not None and _aggregates(calc.get("formula") or ""):
+        try:
+            col, _ = _instance_ref(root, ws, field, "User", kind="qk")
+        except ValueError as exc:
+            return {"ok": False, "why": str(exc)}
+    else:
+        col = _dim_ref(root, ws, field, force="qk")
     dropped = _replace_filter(view, col)
 
     filt = etree.Element("filter")
@@ -4609,6 +4837,7 @@ def range_filter(root, sheet: str, field: str, low=None, high=None,
     if high is not None:
         etree.SubElement(filt, "max").text = _date_literal(high)
     insert_in_order(view, filt, _VIEW_ORDER)
+    add_slice(view, col)
     return {"ok": True, "sheet": sheet, "field": col,
             "from": _date_literal(low) if low is not None else "(no lower bound)",
             "to": _date_literal(high) if high is not None else "(no upper bound)",
@@ -4659,6 +4888,7 @@ def relative_date_filter(root, sheet: str, field: str, period: str = "month",
     filt.set("last-period", str(int(last)))
     filt.set("period-type-v2", p)
     insert_in_order(view, filt, _VIEW_ORDER)
+    add_slice(view, col)
     added = ensure_manifest(root, "ISO8601PeriodTypes")
     out = {"ok": True, "sheet": sheet, "field": col, "period": p,
            "window": f"from {first} to {last}", "in_context": bool(context),

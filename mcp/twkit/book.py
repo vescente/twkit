@@ -121,28 +121,7 @@ class Book:
 
     def _formula(self, formula: str) -> str:
         """Parameters and calculations referenced by caption become their internal names."""
-        def param(m):
-            p = _param_by_caption(self.root, m.group(1))
-            return f"[Parameters].{p.get('name')}" if p is not None else m.group(0)
-        out = re.sub(r"\[Parameters\]\.\[([^\]]+)\]", param, formula or "")
-        ds = self.datasource
-        if ds is None:
-            return out
-        names = {(c.get("name") or "") for c in ds.findall("column")}
-        names |= {f"[{c.get('name')}]" for c in ds.iter("column")
-                  if c.getparent() is not None and c.getparent().tag == "columns"}
-        calcs = {f"[{c.get('caption')}]": c.get("name") for c in ds.findall("column")
-                 if c.find("calculation") is not None and c.get("caption")}
-
-        def calc(m):
-            tok = m.group(0)
-            if tok in names or tok not in calcs:
-                return tok
-            return calcs[tok]
-
-        parts = re.split(r"('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")", out)
-        return "".join(p if i % 2 else re.sub(r"(?<!\])(?<!\.)\[[^\[\]]+\](?!\.)", calc, p)
-                       for i, p in enumerate(parts))
+        return ED.internal_formula(self.root, formula, self.datasource)
 
     def add_calculated_field(self, field_name: str, formula: str, datatype: str = "real",
                              role: str | None = None, field_type: str | None = None,
