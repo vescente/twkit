@@ -1030,12 +1030,14 @@ def sync_viewpoints(win, dash) -> int:
     zoom = {}
     for vp in list(vps):
         z = vp.find("zoom")
-        zoom[vp.get("name")] = z.get("type") if z is not None else "entire-view"
+        zoom[vp.get("name")] = z.get("type") if z is not None else ""   # no zoom = Standard
         vps.remove(vp)
     for sheet in dict.fromkeys(on_dash):
         vp = etree.SubElement(vps, "viewpoint")
         vp.set("name", sheet)
-        etree.SubElement(vp, "zoom").set("type", zoom.get(sheet, "entire-view"))
+        kind = zoom.get(sheet, "entire-view")
+        if kind:
+            etree.SubElement(vp, "zoom").set("type", kind)
     return len(on_dash)
 
 

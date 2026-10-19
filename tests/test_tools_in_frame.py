@@ -73,6 +73,9 @@ VISIBLE = [
                              '{"kind":"row","sheets":["Bars","Trend"],"h":300}]'), []),
     ("edit_zone_fit", dict(dashboard="Overview", sheets="Table", mode="stretch"), []),
     ("edit_zone_style", dict(dashboard="Overview", sheets="Bars", background="#fff3e0"), []),
+    ("edit_table_style", dict(sheets="Table", size="12"), []),
+    ("edit_page_background", dict(dashboards="Overview", color="#fff3e0"), []),
+    ("edit_remove_zones", dict(dashboard="Overview", ids="@PARAMZONE"), []),
     (*FILTER, []),
     ("edit_control_column", dict(dashboard="Overview", refs="Bars|[@DS].[none:product:nk]"), [FILTER]),
     ("edit_add_filter_card", dict(dashboard="Overview", sheet="Bars", field="product",
@@ -265,3 +268,23 @@ def test_measure_names_filter_sits_on_the_filter_shelf(book):
         first = view.find("slices/column")
         assert first is not None and first.text.endswith("[:Measure Names]"), ws.get("name")
     assert seen
+
+
+def test_table_style_sets_one_type_and_bands(book):
+    p = _state(book, "tablestyle", [("edit_table_style", dict(sheets="Table"))])
+    ws = next(w for w in safexml.from_twbx(p).iter("worksheet") if w.get("name") == "Table")
+    rules = {r.get("element"): r for r in ws.findall("table/style/style-rule")}
+    for el in ("cell", "header", "label"):
+        got = {(f.get("attr"), f.get("value")) for f in rules[el].findall("format") if not f.get("field")}
+        assert {("font-size", "10"), ("font-family", "Tableau Book")} <= got, el
+    assert any(f.get("attr") == "band-color" and f.get("value") == "#f6f1ef"
+               for f in rules["pane"].findall("format"))
+
+
+def test_table_style_header_band_fills_column_headers(book):
+    p = _state(book, "tableheader", [("edit_table_style", dict(sheets="Table", header="#484848"))])
+    ws = next(w for w in safexml.from_twbx(p).iter("worksheet") if w.get("name") == "Table")
+    fills = {f.get("field", "").split("].[")[-1]: f.get("value")
+             for f in ws.findall("table/style/style-rule[@element='header']/format")
+             if f.get("attr") == "background-color" and f.get("field")}
+    assert ":Measure Names]" in fills and fills[":Measure Names]"] == "#484848"
