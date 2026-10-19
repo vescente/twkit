@@ -1399,8 +1399,8 @@ def register_dimension_tools(server) -> None:
         `#f6f1ef`; on cool accents and white pages a neutral `#f7f7f8`); no borders, no grid.
         Accent formats set on a field (a header background, a bold label) stay.
         `header`: a dark column-header band, e.g. `#484848`; a nested level gets `#6f6f6f`, labels
-        `#f5f5f5`, the outer level bold, field labels hidden. Deltas by sign (T3) are
-        `edit_sign_color`.
+        `#f5f5f5`, the outer level bold, field labels hidden; `none` removes such a band. Deltas
+        by sign (T3) are `edit_sign_color`.
         """
         from twkit import style as ST
         ed = get_editor()
@@ -1413,7 +1413,9 @@ def register_dimension_tools(server) -> None:
             if bands:
                 ST.row_bands(ws, color=band or ST.BAND_WARM)
             ed.configure_worksheet_style(name, hide_gridlines=True, hide_borders=True)
-            if header:
+            if header.strip().lower() == "none":
+                ED.clear_header_fill(ws)
+            elif header:
                 levels = ED.shelf_tokens(ws.findtext("table/cols") or "")
                 levels = [t for t in levels if ":none:" in t or "].[none:" in t
                           or t.endswith("[:Measure Names]") or ":ok]" in t or ":nk]" in t]
@@ -1466,6 +1468,15 @@ def register_dimension_tools(server) -> None:
             return _json.dumps(ED.viz_in_tooltip(
                 get_editor().root, sheet, tooltip_sheet, width, height, title,
                 [f.strip() for f in fields.split(",") if f.strip()] or None), ensure_ascii=False)
+        except ValueError as exc:
+            return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
+
+    @server.tool()
+    def edit_bars_to_text(sheet: str) -> str:
+        """Turn a bar chart into a text table: the measure leaves the axis and stays as the cell
+        text. Unlike configure_chart, the sheet keeps its filters, sorts and table calculations."""
+        try:
+            return _json.dumps(ED.bars_to_text(get_editor().root, sheet), ensure_ascii=False)
         except ValueError as exc:
             return _json.dumps({"REFUSED": str(exc)}, ensure_ascii=False)
 

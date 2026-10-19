@@ -4058,6 +4058,60 @@ def _style_rule(tbl, element: str):
     return rule
 
 
+def bars_to_text(root, sheet: str) -> dict:
+    """Bars into a text table: the measure axis leaves its shelf and stays as the cell text;
+    filters, sorts and table calculations of the sheet are kept."""
+    ws = _sheet(root, sheet)
+    if ws is None:
+        raise ValueError(f"no sheet {sheet!r} in the workbook")
+    moved = []
+    for tag in ("cols", "rows"):
+        node = ws.find(f"table/{tag}")
+        toks = shelf_tokens(node.text or "") if node is not None else []
+        axes = [t for t in toks if _is_axis(t)]
+        if axes:
+            node.text = rebuild_shelf([t for t in toks if t not in axes])
+            moved += axes
+    if not moved:
+        return {"sheet": sheet, "measures_to_text": [], "why": "no measure axis on the shelves"}
+    for pane in ws.iter("pane"):
+        mark = pane.find("mark")
+        if mark is not None:
+            mark.set("class", "Text")
+        enc = pane.find("encodings")
+        if enc is None:
+            enc = etree.Element("encodings")
+            insert_in_order(pane, enc, _PANE_ORDER)
+        have = {e.get("column") for e in enc.findall("text")}
+        for ref in moved:
+            if ref not in have:
+                etree.SubElement(enc, "text").set("column", ref)
+    for sr in list(ws.iter("style-rule")):
+        if sr.get("element") != "axis":
+            continue
+        for f in list(sr.findall("format")):
+            if f.get("field") in moved:
+                sr.remove(f)
+        if not len(sr):
+            sr.getparent().remove(sr)
+    return {"sheet": sheet, "measures_to_text": moved}
+
+
+def clear_header_fill(ws) -> int:
+    """Undo a column-header band: the header fill and the label colour of the column fields."""
+    levels = set(shelf_tokens(ws.findtext("table/cols") or ""))
+    n = 0
+    for sr in ws.findall("table/style/style-rule"):
+        for f in list(sr.findall("format")):
+            if f.get("field") not in levels:
+                continue
+            if (sr.get("element") == "header" and f.get("attr") == "background-color") or \
+                    (sr.get("element") == "label" and f.get("attr") in ("color", "font-weight")):
+                sr.remove(f)
+                n += 1
+    return n
+
+
 def _is_axis(ref: str) -> bool:
     """A continuous header is an axis: a `:qk` instance or Measure Values."""
     return ref.endswith(":qk]") or ref.endswith("[Multiple Values]")

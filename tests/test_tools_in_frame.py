@@ -76,6 +76,7 @@ VISIBLE = [
     ("edit_table_style", dict(sheets="Table", size="12"), []),
     ("edit_share_filters", dict(source="Bars", targets="Table", fields="product"), [FILTER]),
     ("edit_hide_header", dict(sheet="Bars", fields="country"), []),
+    ("edit_bars_to_text", dict(sheet="Bars"), []),
     ("edit_sheet_title", dict(sheet="Bars", text="Sales by product"),
      [("edit_show_zone_title", dict(dashboard="Overview", sheets="Bars", show=True))]),
     ("edit_page_background", dict(dashboards="Overview", color="#fff3e0"), []),
@@ -294,6 +295,18 @@ def test_table_style_header_band_fills_column_headers(book):
              for f in ws.findall("table/style/style-rule[@element='header']/format")
              if f.get("attr") == "background-color" and f.get("field")}
     assert ":Measure Names]" in fills and fills[":Measure Names]"] == "#484848"
+
+
+def test_table_style_header_none_removes_the_band(book):
+    p = _state(book, "tableheader_off", [
+        ("edit_table_style", dict(sheets="Table", header="#484848")),
+        ("edit_table_style", dict(sheets="Table", header="none"))])
+    ws = next(w for w in safexml.from_twbx(p).iter("worksheet") if w.get("name") == "Table")
+    left = [(sr.get("element"), f.get("attr")) for sr in ws.findall("table/style/style-rule")
+            for f in sr.findall("format")
+            if (f.get("field") or "").endswith("[:Measure Names]")
+            and f.get("attr") in ("background-color", "color", "font-weight")]
+    assert left == [], left
 
 
 def test_viz_in_tooltip_and_shared_filter(book):

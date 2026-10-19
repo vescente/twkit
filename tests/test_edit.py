@@ -2195,3 +2195,22 @@ def test_shared_filter_groups_start_at_three_and_old_ones_move_up():
     assert ED.renumber_filter_groups(root) == {"2": "3"}
     assert {f.get("filter-group") for f in root.iter("filter")} == {"3"}
     assert ED.renumber_filter_groups(root) == {}
+
+
+def test_bars_to_text_keeps_filters_and_moves_the_axis_to_text():
+    root = etree.fromstring(_VIT.replace("<panes><pane/></panes>",
+                                         "<panes><pane><mark class='Bar'/><encodings/></pane></panes>")
+                            .replace("<cols>[ds].[Multiple Values]</cols>",
+                                     "<cols>[ds].[Multiple Values]</cols><style><style-rule element='axis'>"
+                                     "<format attr='display' class='0' field='[ds].[Multiple Values]' "
+                                     "scope='cols' value='false'/></style-rule></style>"))
+    tip = root.find(".//worksheet[@name='Tip']")
+    tip.find("table/view").append(etree.fromstring("<filter class='quantitative' column='[ds].[usr:r:qk]'/>"))
+    r = ED.bars_to_text(root, "Tip")
+    assert r["measures_to_text"] == ["[ds].[Multiple Values]"]
+    assert (tip.findtext("table/cols") or "") == ""
+    assert tip.find(".//pane/mark").get("class") == "Text"
+    assert [e.get("column") for e in tip.find(".//pane/encodings")] == ["[ds].[Multiple Values]"]
+    assert tip.find(".//style-rule[@element='axis']") is None
+    assert tip.find("table/view/filter") is not None
+    assert ED.bars_to_text(root, "Tip")["measures_to_text"] == []
