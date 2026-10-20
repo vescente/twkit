@@ -5296,13 +5296,18 @@ def remove_field(root, sheet: str, field: str, shelf: str = "") -> dict:
                 "shelves": sorted(set(_SHELVES))}
 
     ds = _ds_name(ws)
-    name = field.strip("[]")
-    c = _declared(root, ws, field)
+    pseudo = {"measure names": ":Measure Names", ":measure names": ":Measure Names",
+              "measure values": "Multiple Values", "multiple values": "Multiple Values"
+              }.get(field.strip("[]").strip().lower())
+    name = pseudo or field.strip("[]")
+    c = None if pseudo else _declared(root, ws, field)
     if c is not None:
         name = (c.get("name") or "").strip("[]")
 
     def matches(ref: str) -> bool:
         inner = ref.split("].[", 1)[1].rstrip("]") if "].[" in ref else ref.strip("[]")
+        if pseudo:
+            return inner == pseudo
         parts = inner.split(":")
         return (":".join(parts[1:-1]) if len(parts) >= 3 else inner) == name
 
@@ -5350,7 +5355,39 @@ def remove_field(root, sheet: str, field: str, shelf: str = "") -> dict:
         return {"ok": False,
                 "why": f"field {field!r} is not on these shelves; "
                        f"'removed 0' would read as success"}
+    if pseudo:
+        removed += _drop_measure_names_leftovers(ws, ds)
     return {"ok": True, "sheet": sheet, "removed": len(removed), "what": removed}
+
+
+def _drop_measure_names_leftovers(ws, ds: str) -> list:
+    """Without Measure Values the `[:Measure Names]` filter is dead; without Measure Names
+    so is its `<manual-sort>`."""
+    view = ws.find("table/view")
+    if view is None:
+        return []
+    names, values = f"[{ds}].[:Measure Names]", f"[{ds}].[Multiple Values]"
+    shelves = " ".join(ws.findtext(f"table/{t}") or "" for t in ("rows", "cols"))
+    encoded = {e.get("column") for e in ws.iter() if e.getparent() is not None
+               and e.getparent().tag == "encodings"}
+    gone = []
+    if values not in shelves and values not in encoded:
+        for f in view.findall("filter"):
+            if f.get("column") == names:
+                view.remove(f)
+                gone.append({"filter": names})
+        for sl in view.findall("slices"):
+            for col in sl.findall("column"):
+                if col.text == names:
+                    sl.remove(col)
+            if len(sl) == 0:
+                view.remove(sl)
+    if names not in shelves and names not in encoded:
+        for s in view.findall("manual-sort"):
+            if s.get("column") == names:
+                view.remove(s)
+                gone.append({"manual-sort": names})
+    return gone
 
 
 def _member_literal(value, datatype: str = "") -> str:

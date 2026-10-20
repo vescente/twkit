@@ -150,6 +150,20 @@ def test_parameter_action_declares_the_feature_in_the_manifest(tmp_path):
     assert {"ParameterAction", "ParameterActionClearSelection"} <= flags, flags
 
 
+def test_parameter_action_takes_measure_names_as_source(tmp_path):
+    b = _book(tmp_path)
+    b.add_parameter("Metric", datatype="string", default_value="Sales", domain_type="any")
+    b.add_worksheet("A")
+    b.configure_chart("A", mark_type="Bar", rows=["product"], columns=["SUM(sales)"])
+    b.add_dashboard("D", layout="vertical", worksheet_names=["A"])
+    b.add_dashboard_action("D", "parameter", "A", source_field="Measure Names",
+                           target_parameter="Metric", event_type="on-hover")
+    act = next(b.root.iter("edit-parameter-action"))
+    src = next(p.get("value") for p in act.iter("param") if p.get("name") == "source-field")
+    assert src.endswith("].[:Measure Names]"), src
+    assert act.find("activation").get("type") == "on-hover"
+
+
 @pytest.mark.parametrize("name,folder", [("id_rsa", "keys"), ("data.csv", ".ssh"), ("x.hyper", ".aws")])
 def test_secrets_never_go_into_a_workbook(tmp_path, name, folder):
     d = tmp_path / folder
@@ -178,3 +192,16 @@ def test_checked_save_names_the_inner_workbook_after_the_file(tmp_path):
     assert save_checked(Book(), str(out)).startswith("Saved")
     assert [n for n in zipfile.ZipFile(out).namelist() if n.endswith(".twb")] == ["My Book.twb"]
     assert [p.name for p in tmp_path.iterdir()] == ["My Book.twbx"]
+
+
+def test_parameter_action_clear_option_carries_a_typed_value(tmp_path):
+    b = _book(tmp_path)
+    b.add_parameter("Metric", datatype="string", default_value="Sales", domain_type="any")
+    b.add_parameter("Top", datatype="integer", default_value="5", domain_type="any")
+    b.add_worksheet("A")
+    b.configure_chart("A", mark_type="Bar", rows=["product"], columns=["SUM(sales)"])
+    b.add_dashboard("D", layout="vertical", worksheet_names=["A"])
+    b.add_dashboard_action("D", "parameter", "A", source_field="product", target_parameter="Metric")
+    b.add_dashboard_action("D", "parameter", "A", source_field="SUM(sales)", target_parameter="Top")
+    got = [a.find("clear-option").get("value") for a in b.root.iter("edit-parameter-action")]
+    assert got == ["s:LROOT:", "i:5"], got

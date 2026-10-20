@@ -1230,6 +1230,111 @@ def r46_card_instance_mismatch(b) -> list:
                       fix="filter the card's instance on the sheet (edit_apply_filter keeps it)")]
 
 
+def r47_parameter_action_clear_value(b) -> list:
+    """Symptom: Tableau refuses to open the file: "Internal Error - An unexpected error occurred".
+
+    The log names `ActionListParser::GetParameterActionFromDOM`, `elemChild.HasAttribute(attrValue)`:
+    a parameter action's `<clear-option>` without `value`. The corpus always writes one, even
+    for `do-nothing` (`i:1`, `s:LROOT:`).
+    """
+    bad = sorted({a.get("caption") or a.get("name") for a in b.root.iter("edit-parameter-action")
+                  if any(c.get("value") is None for c in a.findall("clear-option"))})
+    if not bad:
+        return []
+    return [Violation("R47", ERROR,
+                      f"parameter actions with a clear-option without value: {len(bad)} "
+                      f"({', '.join(bad[:4])})",
+                      fix="value typed like the parameter: s:LROOT:<text> or i:<number>")]
+
+
+def _mask_formula(formula: str) -> str:
+    """Comments and string literals blanked to spaces; positions stay."""
+    blank = lambda m: " " * len(m.group(0))
+    out = re.sub(r"//[^\n]*", blank, formula or "")
+    return re.sub(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", blank, out)
+
+
+_AGG_NAMES = re.compile(r"(?i)^(SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN|ATTR|STDEVP?|VARP?|PERCENTILE|"
+                        r"CORR|COVARP?|COLLECT|TOTAL|INDEX|SIZE|FIRST|LAST|LOOKUP|PREVIOUS_VALUE|"
+                        r"RANK\w*|WINDOW_\w+|RUNNING_\w+|SCRIPT_\w+)$")
+
+
+def _bare_refs(formula: str):
+    """`(name, inside_aggregate)` for every unqualified `[name]` outside LOD braces."""
+    from .fields import _args_at_top
+    text = _mask_formula(formula)
+    stack, braces, out, i = [], 0, [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "[":
+            j = text.find("]", i)
+            j = len(text) - 1 if j < 0 else j
+            qualified = text[j + 1:j + 2] == "." or (i > 0 and text[i - 1] == ".")
+            if not qualified and not braces:
+                out.append((text[i + 1:j], any(stack)))
+            i = j + 1
+            continue
+        if ch == "{":
+            braces += 1
+        elif ch == "}":
+            braces = max(0, braces - 1)
+        elif ch == "(":
+            m = re.search(r"(\w+)\s*$", text[:i])
+            fn = m.group(1) if m else ""
+            agg = bool(_AGG_NAMES.match(fn))
+            if agg and fn.upper() in ("MIN", "MAX") and _args_at_top(text, i) > 0:
+                agg = False
+            stack.append(agg)
+        elif ch == ")" and stack:
+            stack.pop()
+        i += 1
+    return out
+
+
+def r48_regexp_over_aggregate(b) -> list:
+    """Symptom: a sheet draws nothing, a viz in tooltip prints its `<Sheet ...>` tag as text; the
+    log says "Cannot mix aggregate and scalar expressions".
+
+    `REGEXP_*` is row-level only: `REGEXP_REPLACE(STR(SUM(x)), ...)` fails at query time, though
+    `STR(ROUND(SUM(x), 1)) + '%'` works. Format an aggregate with arithmetic and `STR`.
+    """
+    from .fields import is_aggregate
+    bad = []
+    for ds in b.root.iter("datasource"):
+        if ds.getparent() is None or ds.getparent().tag != "datasources":
+            continue
+        cols = {(c.get("name") or "").strip("[]"): c for c in ds.findall("column")}
+        calcs = {n: c.find("calculation").get("formula") or "" for n, c in cols.items()
+                 if c.find("calculation") is not None and c.find("calculation").get("class") == "tableau"}
+        memo = {}
+
+        def agg(name, seen=()):
+            if name not in memo:
+                f = calcs.get(name, "")
+                memo[name] = bool(f) and (is_aggregate(f) or any(
+                    r in calcs and r not in seen and agg(r, seen + (name,))
+                    for r, _ in _bare_refs(f)))
+            return memo[name]
+
+        for name, formula in calcs.items():
+            text = _mask_formula(formula)
+            for m in re.finditer(r"(?i)\bREGEXP_\w+\s*\(", text):
+                depth, j = 0, m.end() - 1
+                for j in range(m.end() - 1, len(text)):
+                    depth += {"(": 1, ")": -1}.get(text[j], 0)
+                    if depth == 0:
+                        break
+                arg = formula[m.end():j]
+                if is_aggregate(arg) or any(r in calcs and agg(r) for r, _ in _bare_refs(arg)):
+                    bad.append(cols[name].get("caption") or name)
+                    break
+    if not bad:
+        return []
+    return [Violation("R48", ERROR,
+                      f"REGEXP over an aggregate: {len(bad)} ({', '.join(sorted(bad)[:4])})",
+                      fix="format with arithmetic and STR, or apply REGEXP to a row-level field")]
+
+
 RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r05_measure_names, r06_mysql_connection, r07_extract_packed,
          r08_extension, r10_xsd,
@@ -1244,6 +1349,7 @@ RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r37_gradient_on_plain_measure, r38_label_color_overridden,
          r41_param_ref_by_caption, r42_caption_collision, r43_logical_table_column,
          r44_parameters_as_primary, r45_reserved_filter_group, r46_card_instance_mismatch,
+         r47_parameter_action_clear_value, r48_regexp_over_aggregate,
          r_format_attr]
 
 

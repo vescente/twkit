@@ -653,3 +653,43 @@ def test_r46_card_on_another_instance_than_the_sheet_filter():
     v = run("nk")
     assert len(v) == 1 and "card [none:partner_id:ok], sheet [none:partner_id:nk]" in v[0].message
     assert run("ok") == []
+
+
+def test_r47_parameter_action_clear_option_needs_a_value():
+    from lxml import etree
+
+    from twkit import safexml
+    from twkit.lint import Book, r47_parameter_action_clear_value
+
+    def run(clear):
+        xml = (f"<workbook><actions><edit-parameter-action caption='Hover' name='[Action1]'>"
+               f"<activation type='on-hover'/><source type='sheet' worksheet='D'/>"
+               f"<agg-type type='attr'/>{clear}<params/></edit-parameter-action></actions></workbook>")
+        root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
+        return r47_parameter_action_clear_value(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False))
+    v = run("<clear-option type='do-nothing'/>")
+    assert len(v) == 1 and v[0].rule == "R47" and "Hover" in v[0].message
+    assert run("<clear-option type='do-nothing' value='s:LROOT:'/>") == []
+
+
+def test_r48_regexp_over_an_aggregate():
+    from lxml import etree
+
+    from twkit import safexml
+    from twkit.lint import Book, r48_regexp_over_aggregate
+
+    def run(formula):
+        xml = ("<workbook><datasources><datasource name='ds'>"
+               "<column name='[x]' datatype='real' role='measure' type='quantitative'/>"
+               "<column name='[s]' datatype='string' role='dimension' type='nominal'/>"
+               "<column caption='Total' name='[c1]' datatype='real' role='measure' type='quantitative'>"
+               "<calculation class='tableau' formula='SUM([x])'/></column>"
+               "<column caption='Label' name='[c2]' datatype='string' role='measure' type='nominal'>"
+               f"<calculation class='tableau' formula=\"{formula}\"/></column>"
+               "</datasource></datasources></workbook>")
+        root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
+        return r48_regexp_over_aggregate(Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False))
+    assert len(run("REGEXP_REPLACE(STR([c1]), '(\\d)', '$1,')")) == 1
+    assert len(run("REGEXP_REPLACE(STR(SUM([x])), 'a', 'b')")) == 1
+    assert run("MIN(REGEXP_REPLACE([s], '(\\d)', '$1,'))") == []
+    assert run("STR(ROUND([c1] * 100, 1)) + '%'") == []

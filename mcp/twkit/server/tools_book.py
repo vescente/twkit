@@ -357,6 +357,21 @@ def add_dashboard_action(dashboard_name: str, action_type: str, source_sheet: st
 
 
 @server.tool()
+def edit_hover_measure_tooltip(dashboard_name: str, sheet: str, tooltip_sheet: str,
+                               parameter: str = "p_hover_metric", prefix: str = "Hover") -> str:
+    """Viz in Tooltip of a Measure Names table shows only the hovered measure, formatted like it.
+
+    A tooltip filter never passes Measure Names, so a breakdown in the tooltip repeats every
+    measure. This adds a string `parameter`, a hover parameter action from `sheet` (Measure Names
+    writes the measure caption), and swaps Measure Names/Values on `tooltip_sheet` for one text
+    field (`<prefix> value`). The tooltip sheet keeps its rows, filters and sorts; its measures
+    must be calculations. Add the tooltip first with edit_viz_in_tooltip."""
+    from .. import dash as DASH
+    return _run(lambda: DASH.hover_measure_tooltip(current(), dashboard_name, sheet,
+                                                   tooltip_sheet, parameter, prefix))
+
+
+@server.tool()
 def save_workbook(output_path: str, force: bool = False) -> str:
     """Write the active workbook to a .twbx: the only tool that writes it. A blocker (columns
     missing from the extract, a format error) refuses the save unless `force`; the owner's

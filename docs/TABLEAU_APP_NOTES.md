@@ -352,3 +352,16 @@ So the value list and the formula cannot be walked with one list of strings:
 A miss gives a menu item that selects nothing, and no automatic check sees it.
 
 The cheapest cure: do not put `%` in NEW dimension labels.
+
+## Viz in Tooltip over a Measure Names table (Tableau 2026.1, verified by hovering)
+
+- A tooltip filter never passes Measure Names: neither `filter="<All Fields>"` nor an explicit
+  `<[ds].[:Measure Names]>` in the list. The tooltip sheet shows every measure.
+- A parameter action takes Measure Names as its source field and writes the measure's caption
+  (`NGR`, `Reg count`) into a string parameter; `activation type='on-hover'` updates it before
+  the tooltip draws. `edit_hover_measure_tooltip` builds on this.
+- `<clear-option>` without `value` refuses the whole file ("Internal Error",
+  `ActionListParser::GetParameterActionFromDOM`), even for `do-nothing`. Lint R47.
+- `REGEXP_*` over an aggregate fails at query time ("Cannot mix aggregate and scalar
+  expressions"); the sheet draws nothing and a tooltip prints its `<Sheet ...>` tag as text.
+  `STR`, `LEFT`, `RIGHT`, `MID` over aggregates work. Lint R48.

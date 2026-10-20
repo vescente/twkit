@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 
 from lxml import etree
 
@@ -418,7 +419,16 @@ def action(book, dashboard_name: str, action_type: str, source_sheet: str,
         p = F.param(root, target_parameter)
         if p is None:
             raise ValueError(f"no parameter {target_parameter!r}")
-        sp = F.place(root, ws, source_field)
+        if not clear_value:
+            # Tableau asserts on a clear-option without a value, even for do-nothing.
+            typed = {"string": "s:LROOT:", "integer": f"i:{p.get('value') or 0}"}
+            clear_value = typed.get(p.get("datatype"), "")
+            if not clear_value:
+                raise ValueError(f"a {p.get('datatype')} parameter needs `clear_value`")
+        if source_field.strip("[]").strip().lower() in ("measure names", ":measure names"):
+            source_ref = f"[{F.sheet_datasource(root, ws)}].[:Measure Names]"
+        else:
+            source_ref = F.place(root, ws, source_field).ref
         a = etree.SubElement(acts, "edit-parameter-action")
         a.set("caption", caption or f"Parameter Action {n}")
         a.set("name", name)
@@ -427,10 +437,9 @@ def action(book, dashboard_name: str, action_type: str, source_sheet: str,
         etree.SubElement(a, "agg-type").set("type", aggregation)
         co = etree.SubElement(a, "clear-option")
         co.set("type", "do-nothing" if clear_behavior == "keep-current" else clear_behavior)
-        if clear_value:
-            co.set("value", clear_value)
+        co.set("value", clear_value)
         params = etree.SubElement(a, "params")
-        etree.SubElement(params, "param", name="source-field", value=sp.ref)
+        etree.SubElement(params, "param", name="source-field", value=source_ref)
         # Tableau loads a parameter action only when the manifest declares the feature.
         ED.ensure_format_flags(root, ("ParameterAction", "ParameterActionClearSelection"))
         etree.SubElement(params, "param", name="target-parameter",
@@ -438,3 +447,110 @@ def action(book, dashboard_name: str, action_type: str, source_sheet: str,
     else:
         raise ValueError(f"action_type {action_type!r}: use filter, highlight, url or parameter")
     return f"Added {kind} action {name} to {dashboard_name!r}"
+
+
+def _measure_format(fmt: str) -> str:
+    """A number format as `<decimals><kind><prefix>`: kind `p` is a percent, `n` a number."""
+    first = (fmt or "").split(";")[0]
+    prefix = re.match(r'c"([^"]*)"', first)
+    decimals = re.search(r"0\.(0+)", first)
+    return (f"{min(len(decimals.group(1)), 9) if decimals else 0}"
+            f"{'p' if first.startswith('p') else 'n'}{prefix.group(1) if prefix else ''}")
+
+
+def hover_measure_tooltip(book, dashboard_name: str, sheet: str, tooltip_sheet: str,
+                          parameter: str = "p_hover_metric", prefix: str = "Hover") -> dict:
+    """The Viz in Tooltip of a Measure Names table shows the hovered measure only.
+
+    A tooltip filter never passes Measure Names, so `tooltip_sheet` repeats every measure. Here
+    a hover parameter action writes the hovered measure's caption into `parameter`; the tooltip
+    sheet swaps Measure Names/Values for one text field that picks that measure and formats it
+    like the measure's own number format. `REGEXP_*` cannot run over an aggregate (lint R48),
+    so thousands are grouped arithmetically.
+    """
+    from .book import calc_name
+    root = book.root
+    ws, tip = ED._sheet(root, sheet), ED._sheet(root, tooltip_sheet)
+    if ws is None or tip is None:
+        raise ValueError(f"no sheet {sheet if ws is None else tooltip_sheet!r}")
+    if not any((r.text or "").startswith(f'<Sheet name="{tooltip_sheet}"') for r in ws.iter("run")):
+        raise ValueError(f"{sheet!r} does not show {tooltip_sheet!r} in its tooltip: "
+                         f"edit_viz_in_tooltip first")
+    dash = next((x for x in root.iter("dashboard") if x.get("name") == dashboard_name), None)
+    if dash is None or not any(z.get("name") == sheet for z in dash.iter("zone")):
+        raise ValueError(f"{sheet!r} is not on dashboard {dashboard_name!r}")
+    if F.param(root, parameter) is not None:
+        raise ValueError(f"parameter {parameter!r} already exists")
+    dsn = ED._ds_name(tip)
+    ds = next(d for d in root.findall("datasources/datasource") if d.get("name") == dsn)
+    filt = next((f for f in tip.iter("filter") if f.get("column") == f"[{dsn}].[:Measure Names]"),
+                None)
+    if filt is None:
+        raise ValueError(f"{tooltip_sheet!r} has no Measure Names filter: not a measure table")
+    deps = {ci.get("name"): ci for ci in tip.iter("column-instance")}
+    cols = {c.get("name"): c for c in ds.findall("column")}
+    measures, skipped = [], []
+    for g in filt.iter("groupfilter"):
+        member = (g.get("member") or "").strip('"')
+        if g.get("function") != "member" or "].[" not in member:
+            continue
+        ci = deps.get("[" + member.split("].[", 1)[1])
+        col = cols.get(ci.get("column")) if ci is not None else None
+        if col is None or ci.get("derivation") != "User":
+            skipped.append(member)
+            continue
+        measures.append((col.get("caption") or col.get("name").strip("[]"), col.get("name"),
+                         _measure_format(col.get("default-format"))))
+    if not measures:
+        raise ValueError("no calculated measures in the Measure Names filter")
+    caps = {k: f"{prefix} {k}" for k in ("metric", "format", "digits", "whole", "value")}
+    taken = sorted(set(caps.values()) & {c.get("caption") for c in ds.findall("column")})
+    if taken:
+        raise ValueError(f"captions already taken: {', '.join(taken)}")
+
+    book.add_parameter(parameter, datatype="string", default_value=measures[0][0],
+                       domain_type="any")
+    p = f"[Parameters].{F.param(root, parameter).get('name')}"
+    ids = {k: f"[{calc_name()}]" for k in caps}
+
+    def lit(s):
+        return "'" + s.replace("'", "''") + "'"
+
+    def case(then):
+        return f"CASE {p}\n" + "\n".join(f"WHEN {lit(c)} THEN {then(n, f)}"
+                                          for c, n, f in measures) + "\nEND"
+
+    m, fm, dg, w = ids["metric"], f"MIN({ids['format']})", ids["digits"], ids["whole"]
+    d = f"INT(LEFT({fm}, 1))"
+    group = (f"IF {w} >= 1000000 THEN STR(INT({w} / 1000000)) + ',' + "
+             f"RIGHT('00' + STR(INT({w} / 1000) % 1000), 3) + ',' + RIGHT('00' + STR({w} % 1000), 3)\n"
+             f"ELSEIF {w} >= 1000 THEN STR(INT({w} / 1000)) + ',' + RIGHT('00' + STR({w} % 1000), 3)\n"
+             f"ELSE STR({w}) END")
+    formulas = {
+        "metric": ("real", case(lambda n, f: n + (" * 100" if f[1] == "p" else ""))),
+        "format": ("string", case(lambda n, f: lit(f))),
+        "digits": ("integer", f"INT(ROUND(ABS({m}) * POWER(10, {d})))"),
+        "whole": ("integer", f"INT({dg} / POWER(10, {d}))"),
+        "value": ("string", f"IF NOT ISNULL({m}) THEN\nMID({fm}, 3)\n"
+                            f"+ (IF {m} < 0 THEN '-' ELSE '' END)\n+ ({group})\n"
+                            f"+ (IF {d} > 0 THEN '.' + RIGHT('000000000' + STR({dg}), {d}) ELSE '' END)\n"
+                            f"+ (IF MID({fm}, 2, 1) = 'p' THEN '%' ELSE '' END)\nEND"),
+    }
+    for key, (datatype, formula) in formulas.items():
+        col = etree.Element("column")
+        role = "dimension" if key == "format" else "measure"
+        for k, v in (("caption", caps[key]), ("datatype", datatype), ("name", ids[key]),
+                     ("role", role), ("type", "nominal" if datatype == "string" else "quantitative")):
+            col.set(k, v)
+        etree.SubElement(col, "calculation", {"class": "tableau", "formula": formula})
+        ED.insert_in_order(ds, col, list(ORD.DATASOURCE_ORDER))
+
+    placed = ED.place_field(root, tooltip_sheet, caps["value"], shelf="text", derivation="User")
+    if not placed.get("ok"):
+        raise ValueError(f"could not put {caps['value']!r} on the text: {placed}")
+    ED.remove_field(root, tooltip_sheet, "Measure Names")
+    ED.remove_field(root, tooltip_sheet, "Measure Values")
+    act = action(book, dashboard_name, "parameter", sheet, source_field="Measure Names",
+                 target_parameter=parameter, event_type="on-hover", caption=caps["metric"])
+    return {"ok": True, "measures": len(measures), "skipped": skipped, "parameter": parameter,
+            "fields": list(caps.values()), "action": act}

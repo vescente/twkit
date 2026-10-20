@@ -61,6 +61,20 @@ if cur.x >= x && cur.x <= x + w && cur.y >= y + 28 && cur.y <= y + h {
 }
 """
 
+_SWIFT_HOVER = """
+import CoreGraphics
+import Foundation
+let a = CommandLine.arguments
+guard a.count >= 3, let x = Double(a[1]), let y = Double(a[2]) else { exit(2) }
+let src = CGEventSource(stateID: .hidSystemState)
+for d in [-3.0, 0.0] {
+    CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: x + d, y: y + d),
+            mouseButton: .left)?.post(tap: .cghidEventTap)
+    usleep(150000)
+}
+print("hovered")
+"""
+
 _SWIFT_TYPE = """
 import CoreGraphics
 import Foundation
@@ -184,6 +198,40 @@ def park_mouse(w: dict) -> bool:
     if moved:
         time.sleep(1.2)
     return moved
+
+
+def _hoverer() -> list:
+    """Compiled cursor-move helper."""
+    cache = os.path.join(tempfile.gettempdir(), "twkit_hover")
+    if _trusted(cache):
+        return [cache]
+    src = cache + ".swift"
+    try:
+        with open(src, "w") as f:
+            f.write(_SWIFT_HOVER)
+        r = subprocess.run(["swiftc", "-O", "-o", cache, src],
+                           capture_output=True, timeout=180)
+        if r.returncode == 0 and os.path.exists(cache):
+            return [cache]
+    except Exception:
+        pass
+    return []
+
+
+def hover(x: int, y: int, settle: float = 2.0) -> bool:
+    """Move the cursor to a screen point and wait for the tooltip."""
+    cmd = _hoverer()
+    if not cmd:
+        return False
+    try:
+        r = subprocess.run(cmd + [str(int(x)), str(int(y))],
+                           capture_output=True, text=True, timeout=20)
+    except Exception:
+        return False
+    ok = "hovered" in (r.stdout or "")
+    if ok:
+        time.sleep(settle)
+    return ok
 
 
 def type_text(text: str) -> bool:

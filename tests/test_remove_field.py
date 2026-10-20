@@ -109,3 +109,46 @@ def test_place_and_remove_restores_shelf():
     assert _shelf(root, "rows") != before
     ED.remove_field(root, "Sheet", "GGR", shelf="rows")
     assert _shelf(root, "rows").replace(" ", "") == before.replace(" ", "")
+
+
+_MEASURE_TABLE = """<workbook version='18.1'>
+  <datasources><datasource name='federated.x' version='18.1'>
+    <column datatype='string' name='[brand]' role='dimension' type='nominal' />
+    <column datatype='real' name='[GGR]' role='measure' type='quantitative' />
+  </datasource></datasources>
+  <worksheets>
+    <worksheet name='Sheet'><table>
+      <view>
+        <datasources><datasource name='federated.x' /></datasources>
+        <filter class='categorical' column='[federated.x].[:Measure Names]'>
+          <groupfilter function='member' level='[:Measure Names]'
+                       member='&quot;[federated.x].[sum:GGR:qk]&quot;' />
+        </filter>
+        <manual-sort column='[federated.x].[:Measure Names]' direction='ASC'>
+          <dictionary><bucket>&quot;[federated.x].[sum:GGR:qk]&quot;</bucket></dictionary>
+        </manual-sort>
+        <slices><column>[federated.x].[:Measure Names]</column></slices>
+      </view>
+      <style /><panes><pane><encodings>
+        <text column='[federated.x].[Multiple Values]' />
+      </encodings></pane></panes>
+      <rows>([federated.x].[:Measure Names] / [federated.x].[none:brand:nk])</rows>
+      <cols />
+    </table></worksheet>
+  </worksheets>
+</workbook>
+"""
+
+
+def test_measure_names_and_values_come_off_with_their_filter_and_sort():
+    root = etree.fromstring(_MEASURE_TABLE.encode("utf-8"))
+    view = root.find(".//worksheet/table/view")
+    res = ED.remove_field(root, "Sheet", "Measure Names")
+    assert res["ok"], res
+    assert _shelf(root, "rows") == "[federated.x].[none:brand:nk]"
+    assert view.find("manual-sort") is None
+    assert view.find("filter") is not None, "Measure Values still shows the listed measures"
+    res = ED.remove_field(root, "Sheet", "Measure Values")
+    assert res["ok"], res
+    assert not [e for e in root.iter("text")]
+    assert view.find("filter") is None and view.find("slices") is None

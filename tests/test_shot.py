@@ -139,3 +139,19 @@ def test_book_fingerprint_stable_across_rebuilds(tmp_path):
     shots.mkdir(); (shots / "a.png").write_bytes(b"x")
     SH.remember_shot(a, str(shots))
     assert SH.needs_shot([a], str(shots)) == []
+
+
+def test_hover_moves_to_the_point_and_waits_for_the_tooltip(monkeypatch):
+    from twkit import shot as SH
+    seen, slept = [], []
+
+    class R:
+        stdout = "hovered"
+
+    monkeypatch.setattr(SH, "_hoverer", lambda: ["helper"])
+    monkeypatch.setattr(SH.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or R())
+    monkeypatch.setattr(SH.time, "sleep", slept.append)
+    assert SH.hover(10.7, 20, settle=1.5) is True
+    assert seen == [["helper", "10", "20"]] and slept == [1.5]
+    monkeypatch.setattr(SH, "_hoverer", lambda: [])
+    assert SH.hover(1, 2) is False
