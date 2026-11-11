@@ -288,6 +288,9 @@ _NUMERIC_HEAD = re.compile(
     r"STRPOS|LENGTH|position|positionUTF8|lengthUTF8|MAKE_DATE|"
     r"LOOKUP|WINDOW_\w+|RUNNING_\w+|RANK\w*|INDEX|SIZE|TOTAL|FIRST|LAST)\s*\(")
 _SUBQUERY = re.compile(r"(?is)^\(*\s*SELECT\s+(.*)\s+FROM\s")
+_TEXT_CALL = re.compile(
+    r"(?i)^\(*\s*(CHAR|CHR|UPPER|LOWER|TRIM|LTRIM|RTRIM|LEFT|RIGHT|MID|SUBSTR|SUBSTRING|"
+    r"REPLACE|STR|SPACE|CONCAT)\s*\(")
 
 
 def _looks_textual(operand: str, text_idents: frozenset = frozenset()) -> bool:
@@ -299,6 +302,8 @@ def _looks_textual(operand: str, text_idents: frozenset = frozenset()) -> bool:
         return True
     up = operand.upper()
     if "AS TEXT)" in up or "TOSTRING(" in up:
+        return True
+    if _TEXT_CALL.match(operand):
         return True
     if _NUMERIC_HEAD.match(operand):
         return False
@@ -690,6 +695,7 @@ class Translator:
             min_args=2)
         s = _rewrite_call(s, "LEN", lambda a: (
             f"LENGTH({a[0]})" if hy else f"lengthUTF8({a[0]})"))
+        s = _rewrite_call(s, "CHAR", lambda a: f"CHR({a[0]})" if hy else f"char({a[0]})")
         s = _rewrite_call(s, "PROPER", lambda a: (
             f"INITCAP({a[0]})" if hy else f"initcap({a[0]})"))
         for nm_, to_ in (("MIN", "LEAST"), ("MAX", "GREATEST")):

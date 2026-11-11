@@ -23,6 +23,13 @@ def test_functions_that_did_not_exist(formula, expect):
     assert tr().to_sql(formula)[0] == expect
 
 
+def test_line_break_char_joins_text_in_both_dialects():
+    t = Translator({}, {}, {}, {"a", "b"}, dialect="hyper")
+    t.text_cols = frozenset({"a", "b"})
+    assert t.to_sql("[a] + CHAR(10) + CHAR(10) + [b]")[0] == "a || CHR(10) || CHR(10) || b"
+    assert tr("clickhouse").to_sql("CHAR(10)")[0] == "char(10)"
+
+
 def test_clickhouse_has_own_templates():
     assert tr("clickhouse").to_sql("INT([a])")[0] == "toInt64(a)"
     assert tr("clickhouse").to_sql("TODAY()")[0] == "today()"
@@ -50,6 +57,8 @@ def test_division_by_zero_gives_null(sql, expect):
     ("(CASE WHEN m='A' THEN 1 ELSE 0 END) + 5", "(CASE WHEN m='A' THEN 1 ELSE 0 END) + 5"),
     ("DATE '2026-01-01' + 3 * INTERVAL '1 day'",
      "DATE '2026-01-01' + 3 * INTERVAL '1 day'"),
+    ("a || CHAR(10) + CHAR(10) || b", "a || CHAR(10) || CHAR(10) || b"),
+    ("UPPER(a) + LOWER(b)", "UPPER(a) || LOWER(b)"),
 ])
 def test_string_concat_detected_by_operands(sql, expect):
     assert concat_plus(sql) == expect
