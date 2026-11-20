@@ -144,13 +144,16 @@ def list_dashboards() -> str:
 @server.tool()
 def add_calculated_field(field_name: str, formula: str, datatype: str = "real", role: str = "",
                          field_type: str = "", table_calc: str | dict | None = None,
-                         default_format: str = "", internal_name: str = "") -> str:
+                         default_format: str = "", internal_name: str = "",
+                         datasource: str = "") -> str:
     """A calculated field. Reference fields as `[name]`, other calculations and parameters by
     caption (`[Parameters].[Metric]`); they are stored under their internal names. A caption
-    another field already has is refused (lint R42)."""
+    another field already has is refused (lint R42). `datasource` (name or caption): which
+    source gets it; without it, the main one."""
     return _run(lambda: current().add_calculated_field(
         field_name, formula, datatype=datatype, role=role or None, field_type=field_type or None,
-        table_calc=table_calc, default_format=default_format, internal_name=internal_name or None))
+        table_calc=table_calc, default_format=default_format, internal_name=internal_name or None,
+        datasource=datasource))
 
 
 @server.tool()

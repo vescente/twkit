@@ -365,3 +365,9 @@ The cheapest cure: do not put `%` in NEW dimension labels.
 - `REGEXP_*` over an aggregate fails at query time ("Cannot mix aggregate and scalar
   expressions"); the sheet draws nothing and a tooltip prints its `<Sheet ...>` tag as text.
   `STR`, `LEFT`, `RIGHT`, `MID` over aggregates work. Lint R48.
+- A line break in formatted text is `Æ&#10;`, a run of its own or the end of a run; in the middle
+  of a run's text Desktop prints a literal `Æ`. Lint R49.
+- A grand total's label is `<format attr='total-label' data-class='total' field=… value=…>` in the
+  sheet's `header` style rule (`edit.set_total_label`).
+- A data source's children follow a fixed order; `folders-common` after `object-graph` refuses the
+  file ("element 'folders-common' is not allowed"), and the XSD check does not catch it. Lint R29.

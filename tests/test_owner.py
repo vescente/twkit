@@ -150,6 +150,13 @@ def test_rename_updates_composite_zone_key():
     assert got["zones"] == ["Trends::[Parameters].[P1]", "Trends::horz"]
 
 
+def test_rename_of_a_sheet_follows_its_zone_on_a_renamed_page():
+    got = OW.apply_renames({"zones": ["Compare::Period A old", "Plan::Sheet 16"]},
+                           {"Compare": "Period Comparison", "Period A old": "Period A",
+                            "Sheet 16": "Plan by Day"})
+    assert got["zones"] == ["Period Comparison::Period A", "Plan::Plan by Day"]
+
+
 def test_install_refuses_when_book_open(tmp_path, monkeypatch):
     import subprocess as _sp
 

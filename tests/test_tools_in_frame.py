@@ -110,6 +110,7 @@ NOT_IN_FRAME = {
     "edit_split_source": "moves sheets to a copy of their source; the page draws the same",
     "edit_fit_to_extract": "data source mapping",
     "edit_to_live_sql": "connection",
+    "edit_add_sql_source": "connection",
     "edit_drop_fields": "fields no sheet uses",
     "edit_hide_fields": "data pane and Measure Names lists, not the page",
     "edit_rename_fields": "internal names; the page shows captions (set_caption)",

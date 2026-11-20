@@ -190,6 +190,12 @@ per-workbook script.
 - **A zone removed outside Desktop leaves a hole.** A flow whose children stop short shows a hatched
   area; `edit_repair_dashboards` gives the rest to the last free child. Zone ids are unique per
   layout: a phone layout repeats the page's ids on purpose.
+- **A new page on its own SQL inside an existing workbook** gets its own source:
+  `edit_add_sql_source`, then `add_calculated_field(datasource=…)` and
+  `configure_chart(datasource=…)`; `save_as_extract(only=…)` packages that extract alone and
+  leaves the owner's other extracts as they are.
+- **An aggregate text calculation is discrete.** A status from thresholds (`IF SUM(x) > … THEN
+  'Over' …`) is stored as measure/nominal and placed as `usr:…:nk`, so it can carry a color map.
 - **`save_workbook` refuses a blocker** (extract references, format); `force=True` saves anyway.
 - **The Tableau window is shared.** Captures lock it (`shot.acquire_window`), open a working copy
   under their own name, close it afterwards, and never quit Tableau.

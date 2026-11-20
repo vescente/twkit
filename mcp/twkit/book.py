@@ -119,15 +119,26 @@ class Book:
 
     # calculations and parameters ---------------------------------------------------
 
-    def _formula(self, formula: str) -> str:
+    def source(self, name: str = ""):
+        """The data source by name or caption; without one, the main source."""
+        if not name:
+            return self.datasource
+        ds = next((d for d in self.datasources.findall("datasource")
+                   if name in (d.get("name"), d.get("caption"))), None)
+        if ds is None:
+            raise ValueError(f"no data source {name!r}")
+        return ds
+
+    def _formula(self, formula: str, ds=None) -> str:
         """Parameters and calculations referenced by caption become their internal names."""
-        return ED.internal_formula(self.root, formula, self.datasource)
+        return ED.internal_formula(self.root, formula,
+                                   self.datasource if ds is None else ds)
 
     def add_calculated_field(self, field_name: str, formula: str, datatype: str = "real",
                              role: str | None = None, field_type: str | None = None,
                              table_calc=None, default_format: str = "",
-                             internal_name: str | None = None) -> str:
-        ds = self.datasource
+                             internal_name: str | None = None, datasource: str = "") -> str:
+        ds = self.source(datasource)
         if ds is None:
             raise ValueError("connect a data source before adding calculations")
         for c in ds.findall("column"):
@@ -138,13 +149,13 @@ class Book:
         if internal_name and any(c.get("name") == f"[{internal_name.strip('[]')}]"
                                  for c in ds.findall("column")):
             raise ValueError(f"internal name {internal_name!r} is already taken")
-        formula = self._formula(formula)
+        formula = self._formula(formula, ds)
         from .fields import is_aggregate
         if role is None:
             role = "measure" if (datatype in ("real", "integer")
                                  or is_aggregate(formula)) else "dimension"
         if field_type is None:
-            field_type = ("quantitative" if role == "measure"
+            field_type = ("quantitative" if role == "measure" and datatype not in ("string", "boolean")
                           else "ordinal" if datatype in ("date", "datetime") else "nominal")
         col = etree.Element("column")
         for key, val in (("caption", field_name), ("datatype", datatype),

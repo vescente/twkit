@@ -439,6 +439,31 @@ def test_folder_canon_places_fields_and_lint_sees_it():
     assert calcs and calcs[0].find("folder-item").get("name") == "[NGR]"
 
 
+def test_folder_canon_keeps_datasource_order_and_r29_catches_a_late_folder():
+    from lxml import etree
+
+    from twkit import lint as L
+    from twkit import safexml
+    from twkit.book import Book
+    from twkit.edit import apply_folder_canon
+
+    xml = """<workbook><datasources><datasource name='federated.x' caption='D'>
+      <connection class='federated'/>
+      <column name='[GEO]' datatype='string' role='dimension'/>
+      <layout dim-ordering='alphabetic'/>
+      <date-options start-of-week='monday'/>
+      <object-graph><objects/></object-graph>
+    </datasource></datasources></workbook>"""
+    root = safexml.from_bytes(etree.tostring(etree.fromstring(xml)))
+    late = etree.SubElement(root.find(".//datasource"), "folders-common")
+    assert any(v.rule == "R29" for v in L.r29_element_order(Book(root, "x.twb")))
+    late.getparent().remove(late)
+    apply_folder_canon(root)
+    tags = [c.tag for c in root.find(".//datasource")]
+    assert tags.index("folders-common") < tags.index("layout") < tags.index("object-graph")
+    assert not L.r29_element_order(Book(root, "x.twb"))
+
+
 def test_r07_ignores_tableau_temp_path(tmp_path):
     import zipfile
 

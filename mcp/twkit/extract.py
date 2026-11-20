@@ -788,12 +788,14 @@ def build_hyper_from_csv(csv_path: str, out_path: str, table: str = "Extract",
             "size_mb": round(os.path.getsize(out_path) / 1024 / 1024, 2)}
 
 
-def to_extract(book_path: str, out_path: str = "", table: str = "Extract") -> dict:
+def to_extract(book_path: str, out_path: str = "", table: str = "Extract",
+               only: list | None = None) -> dict:
     """Package a .hyper of each live Custom SQL source, keeping the SQL underneath.
 
     Written the way Tableau Desktop writes an extract: the live connection stays, `<extract>`
     points at the packaged file and the object graph gains an `extract` context. Tableau reads
     the extract (no password, no VPN); Tableau Cloud can refresh it from the SQL on a schedule.
+    `only`: captions or names of the sources to materialize; the others keep their extracts.
     The source workbook is untouched.
     """
     import re
@@ -809,6 +811,13 @@ def to_extract(book_path: str, out_path: str = "", table: str = "Extract") -> di
     sources = [(ds, rel) for ds in root.iter("datasource")
                for rel in [ds.find("connection/relation[@type='text']")]
                if rel is not None and (rel.text or "").strip()]
+    if only:
+        known = {k for ds, _ in sources for k in (ds.get("caption"), ds.get("name"))}
+        missing = [o for o in only if o not in known]
+        if missing:
+            return {"ok": False, "why": f"no Custom SQL source {missing}"}
+        sources = [(ds, rel) for ds, rel in sources
+                   if ds.get("caption") in only or ds.get("name") in only]
     if not sources:
         return {"ok": False, "why": "the workbook has no Custom SQL; nothing to materialize"}
     for ds, _ in sources:
@@ -845,8 +854,10 @@ def to_extract(book_path: str, out_path: str = "", table: str = "Extract") -> di
         packed = {n: (book_path, n) for n in names if n not in dropped and n not in members}
         packed.update(members)
         tmp_out = os.path.join(work, os.path.basename(out_path))
+        twb = next((n for n in zipfile.ZipFile(book_path).namelist() if n.lower().endswith(".twb")),
+                   None) if book_path.lower().endswith(".twbx") else None
         safexml.write_twbx(root, tmp_out,
-                           os.path.splitext(os.path.basename(out_path))[0] + ".twb", packed)
+                           twb or os.path.splitext(os.path.basename(book_path))[0] + ".twb", packed)
         shutil.move(tmp_out, out_path)
     finally:
         shutil.rmtree(work, ignore_errors=True)

@@ -682,18 +682,21 @@ def screenshot_param_states(path: str, param: str, values: str = "",
                       ensure_ascii=False, indent=2)
 
 @server.tool()
-def save_as_extract(path: str, out_path: str = "") -> str:
+def save_as_extract(path: str, out_path: str = "", only: str = "") -> str:
     """Materialize the workbook's live Custom SQL into a packaged .hyper extract.
 
     With an extract the workbook opens without a password or VPN. The SQL stays under the
     extract, as Tableau Desktop writes it, so a server can refresh the extract on a schedule.
     Column types come from the workbook declarations, not from guessing. The source workbook is
-    untouched; the result is written next to it as "<name> (extract).twbx".
+    untouched; the result is written next to it as "<name> (extract).twbx". `only`: comma-separated
+    sources to materialize; the others keep their extracts.
     """
     from twkit import extract as EX
     if not os.path.exists(path):
         return f"ERROR: file not found: {path}"
-    return json.dumps(EX.to_extract(path, out_path), ensure_ascii=False, indent=2)
+    names = [x.strip() for x in only.split(",") if x.strip()]
+    return json.dumps(EX.to_extract(path, out_path, only=names or None),
+                      ensure_ascii=False, indent=2)
 
 @server.tool()
 def tableau_dialog(dismiss: bool = True) -> str:
@@ -2300,6 +2303,22 @@ def register_source_tools(server) -> None:
             ED.to_live_sql(get_editor().root, sql, cols, server=server_host,
                            port=port, dbname=dbname, username=username, driver=driver,
                            datasource=datasource),
+            ensure_ascii=False)
+
+    @server.tool()
+    def edit_add_sql_source(caption: str, sql: str, columns: str, server_host: str,
+                            dbname: str, username: str, port: str = "3306",
+                            driver: str = "mysql") -> str:
+        """Add ANOTHER data source on live Custom SQL; the other sources stay as they are.
+
+        `columns` as in edit_to_live_sql. Calculations go to it with
+        add_calculated_field(datasource=caption), sheets with configure_chart(datasource=caption);
+        save_as_extract(only=caption) packages its extract alone.
+        """
+        cols = _json.loads(columns)
+        return _json.dumps(
+            ED.add_sql_source(get_editor().root, caption, sql, cols, server=server_host,
+                              port=port, dbname=dbname, username=username, driver=driver),
             ensure_ascii=False)
 
 

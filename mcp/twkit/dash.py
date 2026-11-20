@@ -154,13 +154,17 @@ class _Builder:
             z.set("type-v2", "text")
             z.set("forceUpdate", "true")
             ft = etree.Element("formatted-text")
-            run = etree.SubElement(ft, "run")
-            if node.get("bold"):
-                run.set("bold", "true")
-            run.set("fontalignment", str(node.get("align", "1")))
-            run.set("fontcolor", node.get("color") or TEXT_COLOR)
-            run.set("fontsize", str(node.get("font_size") or 12))
-            run.text = str(node.get("text") or "").replace("\n", "Æ\n")
+            lines = str(node.get("text") or "").split("\n")
+            for i, line in enumerate(lines):
+                run = etree.SubElement(ft, "run")
+                if node.get("bold"):
+                    run.set("bold", "true")
+                run.set("fontalignment", str(node.get("align", "1")))
+                run.set("fontcolor", node.get("color") or TEXT_COLOR)
+                run.set("fontsize", str(node.get("font_size") or 12))
+                run.text = line
+                if i < len(lines) - 1:
+                    etree.SubElement(ft, "run").text = "Æ\n"
             ED.insert_in_order(z, ft, _ZONE_ORDER)
         elif kind == "title":
             z.set("type-v2", "title")

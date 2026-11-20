@@ -137,6 +137,9 @@ def derivation(func: str, f: Field) -> tuple[str, str]:
     A bare measure is summed (an aggregate calculation stays as it is); a bare date is the exact
     date, never guessed from its name: ask for MONTH(x) or MONTHTRUNC(x) explicitly.
     """
+    if f.datatype in ("string", "boolean") and (
+            func == "AGG" or (not func and f.role == "measure" and f.aggregated)):
+        return "User", "nk"
     if func:
         return FUNCS[func]
     if f.role == "measure":

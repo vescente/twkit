@@ -136,7 +136,7 @@ def test_extract_keeps_the_sql_underneath_like_desktop(tmp_path, monkeypatch):
     tags = [c.tag for c in ds]
     assert tags.index("extract") < tags.index("layout") < tags.index("object-graph")
     names = zipfile.ZipFile(out).namelist()
-    assert conn.get("dbname") in names and "Live (extract).twb" in names
+    assert conn.get("dbname") in names and "Live.twb" in names
     assert "Data/Extracts/old.hyper" in names, "an unrelated packaged file is kept"
 
 

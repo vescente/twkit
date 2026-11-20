@@ -705,6 +705,16 @@ def r29_element_order(b: Book) -> list[Violation]:
                              f"<{m.group(1)}> is out of order; Tableau will NOT open the workbook",
                              where=v.message.split("ERROR")[0].strip(": "),
                              fix="edit.insert_in_order(parent, node, _VIEW_ORDER/_DS_ORDER)"))
+    from .edit import _DS_ORDER
+    rank = {t: i for i, t in enumerate(_DS_ORDER)}
+    for ds in b.root.findall("datasources/datasource"):
+        seen = [c.tag for c in ds if isinstance(c.tag, str) and c.tag in rank]
+        bad = next((t for a, t in zip(seen, seen[1:]) if rank[t] < rank[a]), None)
+        if bad:
+            out.append(Violation("R29", ERROR,
+                                 f"<{bad}> is out of order; Tableau will NOT open the workbook",
+                                 where=f"data source {ds.get('caption') or ds.get('name')}",
+                                 fix="edit.insert_in_order(parent, node, _DS_ORDER)"))
     return out[:5]
 
 
@@ -1335,6 +1345,20 @@ def r48_regexp_over_aggregate(b) -> list:
                       fix="format with arithmetic and STR, or apply REGEXP to a row-level field")]
 
 
+def r49_line_break_inside_run(b) -> list:
+    """Symptom: a text zone or title shows a literal `Æ` where a new line was meant.
+
+    Desktop writes a line break as a run of its own (`Æ&#10;`) or at the very end of a run;
+    in the corpus (1666 breaks) never in the middle of a run's text.
+    """
+    bad = [(r.text or "")[:40] for r in b.root.iter("run") if re.search(r"Æ\n\S", r.text or "")]
+    if not bad:
+        return []
+    return [Violation("R49", ERROR,
+                      f"line break inside a text run: {len(bad)} ({bad[0]!r}…); Tableau shows 'Æ'",
+                      fix="split the text: a run per line, `Æ\\n` as a run of its own")]
+
+
 RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r05_measure_names, r06_mysql_connection, r07_extract_packed,
          r08_extension, r10_xsd,
@@ -1350,6 +1374,7 @@ RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r41_param_ref_by_caption, r42_caption_collision, r43_logical_table_column,
          r44_parameters_as_primary, r45_reserved_filter_group, r46_card_instance_mismatch,
          r47_parameter_action_clear_value, r48_regexp_over_aggregate,
+         r49_line_break_inside_run,
          r_format_attr]
 
 

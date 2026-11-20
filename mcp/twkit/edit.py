@@ -1944,7 +1944,8 @@ def apply_folder_canon(root, *, datasource: str = "", dims: tuple = (),
 
         for old in ds.findall("folders-common") + ds.findall("folder"):
             ds.remove(old)
-        common = etree.SubElement(ds, "folders-common")
+        common = etree.Element("folders-common")
+        insert_in_order(ds, common, _DS_ORDER)
         for fname in FOLDER_CANON:
             items = sorted(set(plan[fname]))
             if not items:
@@ -2037,6 +2038,28 @@ def to_live_sql(root, sql: str, columns: list, *, server: str, port: str,
             "column_declarations": decls if targets else {},
             "object_graphs_rewritten": graphs,
             "workbook_sources": sorted(set(seen))}
+
+
+def add_sql_source(root, caption: str, sql: str, columns: list, *, server: str, port: str,
+                   dbname: str, username: str, driver: str = "mysql") -> dict:
+    """Add ANOTHER data source on live Custom SQL; the workbook's other sources stay as they are."""
+    dss = root.find("datasources")
+    if dss is None:
+        dss = etree.SubElement(root, "datasources")
+    if any(caption in (d.get("caption"), d.get("name")) for d in dss.findall("datasource")):
+        raise ValueError(f"a source named {caption!r} already exists")
+    ds = etree.SubElement(dss, "datasource")
+    for k, v in (("caption", caption), ("inline", "true"),
+                 ("name", "federated." + uuid.uuid4().hex[:28]), ("version", "18.1")):
+        ds.set(k, v)
+    etree.SubElement(ds, "connection").set("class", "federated")
+    etree.SubElement(ds, "aliases").set("enabled", "yes")
+    res = to_live_sql(root, sql, columns, server=server, port=port, dbname=dbname,
+                      username=username, driver=driver, datasource=ds.get("name"))
+    from . import order as ORD
+    ORD.normalize_datasource(ds)
+    return {"source": ds.get("name"), "caption": caption, "columns": len(columns),
+            "object_graphs_rewritten": res["object_graphs_rewritten"]}
 
 
 def fit_to_extract(book_path: str, rename: dict = None,
@@ -2461,6 +2484,19 @@ def set_column_width(root, sheet: str, field_caption: str, px: int,
                      element: str = "header") -> int:
     """Column width of a sheet in pixels."""
     return _set_field_format(root, sheet, field_caption, "width", px, element)
+
+
+def set_total_label(root, sheet: str, field_caption: str, label: str = "Total") -> int:
+    """The grand total's label on a dimension's header, as Desktop writes it (`total-label`)."""
+    n = _set_field_format(root, sheet, field_caption, "total-label", label, "header")
+    for ws in root.iter("worksheet"):
+        if ws.get("name") == sheet:
+            for f in ws.iter("format"):
+                if f.get("attr") == "total-label":
+                    f.attrib.pop("value")
+                    f.set("data-class", "total")
+                    f.set("value", label)
+    return n
 
 
 def set_header_height(root, sheet: str, field_caption: str, px: int) -> int:

@@ -200,7 +200,9 @@ def apply_renames(before: dict, renames: dict) -> dict:
         if x in renames:
             return renames[x]
         head, sep, tail = x.partition("::")
-        return renames[head] + sep + tail if sep and head in renames else x
+        if not sep:
+            return x
+        return renames.get(head, head) + sep + renames.get(tail, tail)
     return {k: sorted({fix(x) for x in v}) for k, v in before.items()}
 
 
