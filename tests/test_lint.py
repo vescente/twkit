@@ -718,3 +718,38 @@ def test_r48_regexp_over_an_aggregate():
     assert len(run("REGEXP_REPLACE(STR(SUM([x])), 'a', 'b')")) == 1
     assert run("MIN(REGEXP_REPLACE([s], '(\\d)', '$1,'))") == []
     assert run("STR(ROUND([c1] * 100, 1)) + '%'") == []
+
+
+def test_r50_packaged_excel_by_temp_path_and_its_fix(tmp_path):
+    import zipfile
+
+    from twkit import edit as ED
+    from twkit import lint as L
+    from twkit import safexml
+
+    temp = "/var/folders/x/T/tableau-temp/593349048/Data/Downloads/plan.xlsx"
+    twb = ("<?xml version='1.0' encoding='utf-8' ?>\n<workbook><datasources>"
+           "<datasource name='ds'><connection class='federated'><named-connections>"
+           "<named-connection name='xl'><connection class='excel-direct' "
+           f"filename='{temp}'/></named-connection></named-connections></connection>"
+           "</datasource></datasources></workbook>")
+    p = tmp_path / "B.twbx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("B.twb", twb)
+        z.writestr("Data/Downloads/plan.xlsx", b"x")
+    assert [(v.rule, v.severity) for v in L.r50_packaged_file_by_temp_path(L.load(str(p)))] == \
+        [("R50", L.WARN)]
+    lost = tmp_path / "Lost.twbx"
+    with zipfile.ZipFile(lost, "w") as z:
+        z.writestr("Lost.twb", twb)
+    got = L.r50_packaged_file_by_temp_path(L.load(str(lost)))
+    assert got[0].severity == L.ERROR and "NOT in the package" in got[0].message
+    root = safexml.from_twbx(str(p))
+    assert ED.relative_packaged_paths(root) == 1
+    assert next(root.iter("connection")).get("filename") != temp
+    assert [c.get("filename") for c in root.iter("connection") if c.get("filename")] == \
+        ["Data/Downloads/plan.xlsx"]
+    fixed = tmp_path / "Fixed.twbx"
+    safexml.write_twbx(root, str(fixed), "Fixed.twb", {})
+    got = L.r50_packaged_file_by_temp_path(L.load(str(fixed)))
+    assert got[0].severity == L.ERROR, "a relative path to a file that is not packed"

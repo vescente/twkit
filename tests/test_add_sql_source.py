@@ -153,3 +153,39 @@ def test_text_zone_line_break_is_a_run_of_its_own_and_r49_catches_the_old_form(t
     assert not L.r49_line_break_inside_run(book)
     next(r for r in book.root.iter("run")).text = "One.Æ\nTwo."
     assert L.r49_line_break_inside_run(book)[0].rule == "R49"
+
+
+def test_file_table_moves_to_the_sources_own_sql():
+    root = etree.fromstring("""<workbook><datasources>
+      <datasource caption='Model' name='federated.m'><connection class='federated'>
+        <named-connections>
+          <named-connection name='mysql.db'><connection class='mysql' dbname='marts'/></named-connection>
+          <named-connection name='excel-direct.x'><connection class='excel-direct'
+              filename='Data/Downloads/rows.xlsx'/></named-connection>
+        </named-connections>
+        <relation join='inner' type='collection'>
+          <relation connection='mysql.db' name='facts' type='text'>SELECT 1</relation>
+          <relation connection='excel-direct.x' name='total_rows' table='[total_rows$]' type='table'>
+            <columns header='yes'><column datatype='string' name='Total Row'/></columns>
+          </relation>
+        </relation>
+        <metadata-records>
+          <metadata-record class='capability'><parent-name>[total_rows]</parent-name></metadata-record>
+          <metadata-record class='column'><remote-name>Total Row</remote-name><remote-type>130</remote-type>
+            <parent-name>[total_rows]</parent-name><local-type>string</local-type></metadata-record>
+        </metadata-records>
+      </connection>
+      <object-graph><objects><object caption='total_rows' id='total!rows_1'><properties context=''>
+        <relation connection='excel-direct.x' name='total_rows' table='[total_rows$]' type='table'/>
+      </properties></object></objects></object-graph>
+      </datasource></datasources></workbook>""")
+    got = ED.table_to_sql(root, "Model", "total_rows", "SELECT 'A' AS `Total Row`, 1 AS `Sort`")
+    assert got == {"relations": 2, "connection": "mysql.db",
+                   "file_connections_dropped": ["Data/Downloads/rows.xlsx"]}
+    rels = [r for r in root.iter("relation") if r.get("name") == "total_rows"]
+    assert all(r.get("type") == "text" and r.get("connection") == "mysql.db" and r.get("table") is None
+               and r.find("columns") is None and "Total Row" in r.text for r in rels)
+    assert root.find(".//object").get("id") == "total!rows_1"
+    assert not [c for c in root.iter("connection") if c.get("class") == "excel-direct"]
+    recs = list(root.iter("metadata-record"))
+    assert len(recs) == 1 and recs[0].findtext("remote-type") == "129"

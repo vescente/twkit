@@ -1359,6 +1359,34 @@ def r49_line_break_inside_run(b) -> list:
                       fix="split the text: a run per line, `Æ\\n` as a run of its own")]
 
 
+def r50_packaged_file_by_temp_path(b) -> list:
+    """Symptom: the server refresh fails with "make sure you have specified the correct path and
+    have read permission for the file", though Desktop opens the workbook.
+
+    Desktop may save a file source (Excel, text) by the path it unpacked it to
+    (`.../tableau-temp/<n>/Data/...`), sometimes without packing the file at all; only the
+    relative `Data/...` path to a packed file exists on a server.
+    """
+    if not b.is_twbx:
+        return []
+    packed = set(b.archive)
+    files = {f for c in b.root.iter("connection")
+             for f in [(c.get("filename") or "").replace("\\", "/")]
+             if f.startswith("Data/") or ("/tableau-temp/" in f and "/Data/" in f)}
+    temp = sorted(f for f in files if "/tableau-temp/" in f)
+    lost = sorted(f for f in files if "Data/" + f.split("Data/", 1)[1] not in packed)
+    if not (temp or lost):
+        return []
+    name = (lost or temp)[0].rsplit("/", 1)[-1]
+    what = "file source referenced by a temp path" if temp else "file source"
+    return [Violation("R50", ERROR if lost else WARN,
+                      f"{what}: {len(temp or lost)} ({name})"
+                      + ("; the file is NOT in the package" if lost else "")
+                      + "; a server refresh will not find it",
+                      fix="pack the file under Data/ and point the source at it "
+                          "(edit.relative_packaged_paths)")]
+
+
 RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r05_measure_names, r06_mysql_connection, r07_extract_packed,
          r08_extension, r10_xsd,
@@ -1374,7 +1402,7 @@ RULES = [r01_header, r02_date_params, r03_string_params, r04_boolean_calcs,
          r41_param_ref_by_caption, r42_caption_collision, r43_logical_table_column,
          r44_parameters_as_primary, r45_reserved_filter_group, r46_card_instance_mismatch,
          r47_parameter_action_clear_value, r48_regexp_over_aggregate,
-         r49_line_break_inside_run,
+         r49_line_break_inside_run, r50_packaged_file_by_temp_path,
          r_format_attr]
 
 

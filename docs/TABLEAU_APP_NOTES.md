@@ -371,3 +371,6 @@ The cheapest cure: do not put `%` in NEW dimension labels.
   sheet's `header` style rule (`edit.set_total_label`).
 - A data source's children follow a fixed order; `folders-common` after `object-graph` refuses the
   file ("element 'folders-common' is not allowed"), and the XSD check does not catch it. Lint R29.
+- Desktop may save a packaged Excel or text source by its unpack path (`.../tableau-temp/<n>/Data/...`).
+  Desktop still opens it; a server refresh fails with "make sure you have specified the correct path
+  and have read permission for the file". The relative `Data/...` path works in both. Lint R50.

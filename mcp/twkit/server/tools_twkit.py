@@ -699,6 +699,22 @@ def save_as_extract(path: str, out_path: str = "", only: str = "") -> str:
                       ensure_ascii=False, indent=2)
 
 @server.tool()
+def refresh_extracts(path: str, out_path: str = "", only: str = "") -> str:
+    """New data in the workbook's packaged extracts, one-table or multi-table models alike.
+
+    Each extract table re-reads its live SQL into a Hyper table of the same name and schema; the
+    XML stays as Desktop wrote it. A table that reads a file is refused (edit.table_to_sql first).
+    `only`: comma-separated sources. The result goes next to it as "<name> (refreshed).twbx".
+    """
+    from twkit import extract as EX
+    if not os.path.exists(path):
+        return f"ERROR: file not found: {path}"
+    names = [x.strip() for x in only.split(",") if x.strip()]
+    return json.dumps(EX.refresh_extract_data(path, out_path, only=names or None),
+                      ensure_ascii=False, indent=2)
+
+
+@server.tool()
 def tableau_dialog(dismiss: bool = True) -> str:
     """Read and close a Tableau error dialog: the details are neither in the log nor in the XML.
 

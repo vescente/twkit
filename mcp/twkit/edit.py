@@ -2062,6 +2062,62 @@ def add_sql_source(root, caption: str, sql: str, columns: list, *, server: str, 
             "object_graphs_rewritten": res["object_graphs_rewritten"]}
 
 
+def table_to_sql(root, datasource: str, table: str, sql: str) -> dict:
+    """A logical table read from a file (Excel, text) re-pointed at Custom SQL on the source's own
+    database connection; the file connection goes when nothing else reads it.
+
+    The table keeps its object id and columns, so relationships, fields and the extract stay."""
+    ds = next((d for d in root.findall("datasources/datasource")
+               if datasource in (d.get("caption"), d.get("name"))), None)
+    if ds is None:
+        raise ValueError(f"no data source {datasource!r}")
+    ncs = {nc.get("name"): nc.find("connection") for nc in
+           ds.findall("connection/named-connections/named-connection")}
+    rels = [r for r in ds.iter("relation") if r.get("name") == table and r.get("type") == "table"]
+    if not rels:
+        raise ValueError(f"no file table {table!r} in {datasource!r}")
+    old = rels[0].get("connection")
+    db = next((r.get("connection") for r in ds.iter("relation")
+               if r.get("type") == "text" and r.get("connection") in ncs
+               and r.get("connection") != old), None)
+    if db is None:
+        raise ValueError(f"{datasource!r} has no Custom SQL connection to reuse")
+    for r in rels:
+        for c in r.findall("columns"):
+            r.remove(c)
+        r.attrib.pop("table", None)
+        r.set("connection", db)
+        r.set("type", "text")
+        r.text = _desktop_sql(sql)
+    parent = f"[{table}]"
+    for rec in list(ds.iter("metadata-record")):
+        if rec.findtext("parent-name") != parent:
+            continue
+        if rec.get("class") == "capability":
+            rec.getparent().remove(rec)
+        elif rec.findtext("local-type") == "string" and rec.find("remote-type") is not None:
+            rec.find("remote-type").text = _REMOTE_TYPE["string"]
+    dropped = []
+    if not any(r.get("connection") == old for r in ds.iter("relation")):
+        for nc in ds.findall("connection/named-connections/named-connection"):
+            if nc.get("name") == old:
+                f = nc.find("connection").get("filename") or ""
+                dropped.append(f.replace("\\", "/"))
+                nc.getparent().remove(nc)
+    return {"relations": len(rels), "connection": db, "file_connections_dropped": dropped}
+
+
+def relative_packaged_paths(root) -> int:
+    """File sources saved by Desktop's unpack path (`.../tableau-temp/<n>/Data/...`) back to `Data/...`."""
+    n = 0
+    for c in root.iter("connection"):
+        f = (c.get("filename") or "").replace("\\", "/")
+        if "/tableau-temp/" in f and "/Data/" in f:
+            c.set("filename", "Data/" + f.split("/Data/", 1)[1])
+            n += 1
+    return n
+
+
 def fit_to_extract(book_path: str, rename: dict = None,
                    fallback_dim: str = "") -> dict:
     """Bring the workbook's references in line with the columns of ITS OWN extract."""

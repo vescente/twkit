@@ -134,6 +134,7 @@ NOT_IN_FRAME = {
     "add_dashboard_action": "acts on click or hover",
     "set_worksheet_hidden": "the sheet tab, not the page",
     "save_as_extract": "writes another file with the same data",
+    "refresh_extracts": "writes another file with the same layout and new data",
     "install_palette": "declares palettes in Preferences.tps; drawn once a sheet uses one",
     "create_view": "a database object, not the workbook",
     "remove_calculated_field": "removes only a field no sheet uses; refuses otherwise",

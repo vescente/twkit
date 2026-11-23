@@ -194,6 +194,10 @@ per-workbook script.
   `edit_add_sql_source`, then `add_calculated_field(datasource=…)` and
   `configure_chart(datasource=…)`; `save_as_extract(only=…)` packages that extract alone and
   leaves the owner's other extracts as they are.
+- **Fresh data without Desktop**: `refresh_extracts` re-reads every extract table, one-table or a
+  multi-table model (one Hyper table per object, named by the object id), from its live SQL into
+  the same schema; the XML stays. A table read from a file must move to SQL first
+  (`edit.table_to_sql`): a packaged file does not survive a re-save and a server cannot refresh it.
 - **An aggregate text calculation is discrete.** A status from thresholds (`IF SUM(x) > … THEN
   'Over' …`) is stored as measure/nominal and placed as `usr:…:nk`, so it can carry a color map.
 - **`save_workbook` refuses a blocker** (extract references, format); `force=True` saves anyway.

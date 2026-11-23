@@ -914,3 +914,152 @@ def _extract_node(ds, rel, hyper_rel: str, table: str, rows: int, caption: str) 
             obj.remove(old)
         node(node(obj, "properties", (("context", "extract"),)), "relation",
              (("name", "Extract"), ("table", table_ref), ("type", "table")))
+
+
+def extract_tables(ds) -> list[tuple[str, str]]:
+    """`(hyper table, live SQL)` of each table a source's extract holds, single or multi-table.
+
+    The live SQL is what the table reads before extraction: Custom SQL, or a database table."""
+    from .dryrun import unescape_sql
+    ex = ds.find("extract/connection")
+    if ex is None:
+        return []
+    ncs = {nc.get("name"): nc.find("connection") for nc in
+           ds.findall("connection/named-connections/named-connection")}
+
+    def sql(rel) -> str:
+        cls = (ncs.get(rel.get("connection")) if rel.get("connection") else None)
+        if cls is not None and cls.get("class") in ("excel-direct", "textscan"):
+            raise ValueError(f"table {rel.get('name')!r} reads a file ({cls.get('class')}); "
+                             f"move it to SQL first (edit.table_to_sql)")
+        if rel.get("type") == "text":
+            return unescape_sql(rel.text or "")
+        if rel.get("type") == "table" and rel.get("table"):
+            return "SELECT * FROM " + ".".join(p.strip("[]") for p in rel.get("table").split("].["))
+        raise ValueError(f"table {rel.get('name')!r}: relation type {rel.get('type')!r} is not supported")
+
+    def hyper_name(rel) -> str:
+        return (rel.get("table") or "").split("].[", 1)[-1].strip("[]")
+
+    objs = ds.findall("object-graph/objects/object")
+    if len(objs) > 1:
+        out = []
+        for o in objs:
+            live = o.find("properties[@context='']/relation")
+            ext = o.find("properties[@context='extract']/relation")
+            if live is None or ext is None:
+                raise ValueError(f"object {o.get('caption')!r} has no live or extract relation")
+            out.append((hyper_name(ext), sql(live)))
+        return out
+    live = ds.find("connection/relation")
+    if objs:
+        live = objs[0].find("properties[@context='']/relation")
+    return [(hyper_name(ex.find("relation")), sql(live))]
+
+
+def _cast_for(sql_type):
+    import datetime as _dt
+    import decimal
+    from tableauhyperapi import TypeTag
+    tag = sql_type.tag
+    if tag in (TypeTag.BIG_INT, TypeTag.INT, TypeTag.SMALL_INT):
+        return lambda v: int(v) if "." not in v else int(float(v))
+    if tag == TypeTag.DOUBLE:
+        return float
+    if tag == TypeTag.NUMERIC:
+        return decimal.Decimal
+    if tag == TypeTag.BOOL:
+        return lambda v: v not in ("0", "false", "False")
+    if tag == TypeTag.DATE:
+        return lambda v: _dt.date.fromisoformat(v[:10])
+    if tag in (TypeTag.TIMESTAMP, TypeTag.TIMESTAMP_TZ):
+        return lambda v: _dt.datetime.fromisoformat(v.replace(" ", "T")[:26])
+    return str
+
+
+def refresh_extract_data(book_path: str, out_path: str = "", only: list | None = None) -> dict:
+    """New data in the workbook's extracts, the way a refresh brings it: each table of an extract
+    (one-table or a multi-table model) re-reads its live SQL into a Hyper table of the same name
+    and schema. The workbook XML is kept as Desktop wrote it, except the refresh time."""
+    import datetime
+    import shutil
+    import zipfile
+    from tableauhyperapi import (Connection, CreateMode, HyperProcess, Inserter, TableDefinition,
+                                 TableName, Telemetry)
+    from . import config
+    from . import safexml
+    from .owner import check_write
+
+    root = safexml.from_twbx(book_path)
+    out_path = out_path or book_path.replace(".twbx", " (refreshed).twbx")
+    check_write(out_path)
+    with zipfile.ZipFile(book_path) as z:
+        names = z.namelist()
+    sources = [ds for ds in root.findall("datasources/datasource") if ds.find("extract") is not None
+               and (not only or ds.get("caption") in only or ds.get("name") in only)]
+    if only:
+        known = {k for ds in sources for k in (ds.get("caption"), ds.get("name"))}
+        missing = [o for o in only if o not in known]
+        if missing:
+            return {"ok": False, "why": f"no extracted source {missing}"}
+    plans = [(ds, ds.find("extract/connection").get("dbname"), extract_tables(ds)) for ds in sources]
+    for ds, member, _ in plans:
+        if member not in names:
+            return {"ok": False, "why": f"{ds.get('caption')}: {member} is not in the package"}
+    ch = config.clickhouse(read_only=True)
+    work = tempfile.mkdtemp(prefix="twkit_refresh_")
+    built, members = [], {}
+    try:
+        with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU,
+                          parameters=HYPER_QUIET) as hp:
+            for i, (ds, member, tables) in enumerate(plans):
+                old = os.path.join(work, f"old_{i}.hyper")
+                new = os.path.join(work, f"new_{i}.hyper")
+                with zipfile.ZipFile(book_path) as z, z.open(member) as fin, open(old, "wb") as fout:
+                    shutil.copyfileobj(fin, fout, 1 << 20)
+                with Connection(hp.endpoint, old) as c:
+                    defs = {str(t.name.unescaped): c.catalog.get_table_definition(t)
+                            for s in c.catalog.get_schema_names()
+                            for t in c.catalog.get_table_names(s)}
+                want = {t for t, _ in tables}
+                if set(defs) != want:
+                    raise ValueError(f"{ds.get('caption')}: extract tables {sorted(defs)} "
+                                     f"do not match the model {sorted(want)}")
+                counts = {}
+                with Connection(hp.endpoint, new, CreateMode.CREATE_AND_REPLACE) as c:
+                    for table, sql in tables:
+                        src = defs[table]
+                        schema = src.table_name.schema_name.name.unescaped
+                        d = TableDefinition(TableName(schema, table), src.columns)
+                        c.catalog.create_schema_if_not_exists(schema)
+                        c.catalog.create_table(d)
+                        cols, _, batches = ch.query_stream(_chsafe.read_only(sql))
+                        if len(cols) != len(d.columns):
+                            raise ValueError(f"{ds.get('caption')}.{table}: the query returns "
+                                             f"{len(cols)} columns, the extract has {len(d.columns)}")
+                        casts = [_cast_for(col.type) for col in d.columns]
+                        n = 0
+                        with Inserter(c, d) as ins:
+                            for chunk in batches:
+                                ins.add_rows([[None if v is None else f(v)
+                                               for v, f in zip(row, casts)] for row in chunk])
+                                n += len(chunk)
+                            ins.execute()
+                        counts[table] = n
+                members[member] = new
+                ex = ds.find("extract/connection")
+                ex.set("update-time", datetime.datetime.now().strftime("%m/%d/%Y %I:%M:%S %p"))
+                for ev in ex.iter("refresh-event"):
+                    ev.set("rows-inserted", str(sum(counts.values())))
+                built.append({"source": ds.get("caption") or ds.get("name"), "file": member,
+                              "rows": counts})
+        twb = next(n for n in names if n.lower().endswith(".twb"))
+        packed = {n: (book_path, n) for n in names if n != twb and n not in members}
+        packed.update(members)
+        tmp_out = os.path.join(work, os.path.basename(out_path))
+        safexml.write_twbx(root, tmp_out, twb, packed)
+        shutil.move(tmp_out, out_path)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return {"ok": True, "file": out_path, "sources": built,
+            "size_mb": round(os.path.getsize(out_path) / 1024 / 1024, 2)}
