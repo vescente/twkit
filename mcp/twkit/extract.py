@@ -1,7 +1,11 @@
 """Materialise a database table or a workbook's Custom SQL into a Tableau extract (`.hyper`)."""
 from __future__ import annotations
 
-HYPER_QUIET = {"log_config": ""}
+# No log files; a runaway query fails instead of filling the disk: one temp file stops at 2 GB, all temp files
+# stop at 90% disk use.
+HYPER_QUIET = {"log_config": "", "temp_file_size_limit": "2g", "temp_disk_space_limit": "90%"}
+# A check reads extracts of a few hundred MB; a query longer than this is a runaway join, not a slow check.
+HYPER_READ_TIMEOUT = {"query_timeout": "60s"}
 
 import os
 import tempfile

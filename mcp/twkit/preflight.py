@@ -120,8 +120,8 @@ def preflight(path: str, db: str = "", table: str = "",
                 blockers.append(f"empty sheets: "
                                 f"{', '.join(s.sheet for s in empty[:4])}")
         if skipped:
-            gaps.append(f"{len(skipped)} sheets with LOD/table calculations "
-                        f"not checked by the dry run")
+            gaps.append(f"{len(skipped)} sheets not checked by the dry run "
+                        f"({skipped[0].sheet}: {(skipped[0].note or '')[:90]})")
         loose = [s for s in sheets if getattr(s, "untranslated", None)]
         if loose:
             gaps.append(f"filters not applied by the dry run on {len(loose)} sheets "

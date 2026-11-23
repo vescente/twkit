@@ -170,3 +170,6 @@ def test_unpacked_extract_from_cache(tmp_path):
     assert a == b
     c = DR._unpack_member(str(book), "Data/Extracts/x.hyper", fresh=True)
     assert c != a
+    DR._drop_dir(os.path.dirname(c))
+    DR._drop_cache()
+    assert not os.path.exists(a) and not os.path.exists(c)

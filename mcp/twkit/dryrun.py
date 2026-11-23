@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 
+import atexit
+import os
 import re
+import shutil
 from dataclasses import dataclass, field
 
 from twkit import chsafe as _chsafe
@@ -1437,17 +1440,19 @@ _TRUNC_SQL = {"tdy": "day", "twk": "week", "tmn": "month",
 class _HyperTarget:
     """Run SQL inside the .hyper itself, the exact source Tableau reads."""
 
-    def __init__(self, hyper_path: str):
+    def __init__(self, hyper_path: str, own_dir: str = ""):
         self.path = hyper_path
+        self.own_dir = own_dir
         self.dialect = "hyper"
         from tableauhyperapi import Connection, HyperProcess, Telemetry
 
-        from .extract import HYPER_QUIET
+        from .extract import HYPER_QUIET, HYPER_READ_TIMEOUT
         self._hp = HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU,
                                 parameters=HYPER_QUIET)
         self._conn = None
         try:
-            self._conn = Connection(endpoint=self._hp.endpoint, database=hyper_path)
+            self._conn = Connection(endpoint=self._hp.endpoint, database=hyper_path,
+                                    parameters=HYPER_READ_TIMEOUT)
             names = []
             for schema in self._conn.catalog.get_schema_names():
                 names += list(self._conn.catalog.get_table_names(schema))
@@ -1483,6 +1488,8 @@ class _HyperTarget:
                 self._conn.close()
         finally:
             self._hp.close()
+            if self.own_dir:
+                _drop_dir(self.own_dir)
 
 
 class _ClickhouseTarget:
@@ -1636,19 +1643,41 @@ def member_counts(path: str, refs: list) -> dict:
 
 
 _HYPER_CACHE: dict = {}
+# Hyper's own limits (extract.HYPER_QUIET, HYPER_READ_TIMEOUT) end a runaway query with these messages.
+_GUARD_STOP = re.compile(r"exceeded its size limit|exceeded the time limit|temp_disk_space_limit")
+
+
+def _drop_dir(path: str) -> None:
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _drop_cache() -> None:
+    for hit in _HYPER_CACHE.values():
+        _drop_dir(os.path.dirname(hit))
+    _HYPER_CACHE.clear()
+
+
+atexit.register(_drop_cache)
 
 
 def _open_hyper(book_path: str, arcname: str):
-    """Target on an extract from the package; repeated calls reuse the unpacked cached file."""
+    """Target on an extract from the package; repeated calls reuse the unpacked cached file. A cached copy
+    already attached by an open target is locked: the fallback copy is the target's own and goes on close."""
     try:
         return _HyperTarget(_unpack_member(book_path, arcname))
     except Exception:
-        return _HyperTarget(_unpack_member(book_path, arcname, fresh=True))
+        own = _unpack_member(book_path, arcname, fresh=True)
+        try:
+            return _HyperTarget(own, own_dir=os.path.dirname(own))
+        except Exception:
+            _drop_dir(os.path.dirname(own))
+            raise
 
 
 def _unpack_member(book_path: str, arcname: str, fresh: bool = False) -> str:
-    """Extract a package entry to a temp file; repeated calls reuse the cache."""
-    import os
+    """Extract a package entry to a temp file; repeated calls reuse the cache, one copy per entry: a new
+    revision of the book replaces the copy of the previous one."""
     import tempfile
     import zipfile
     try:
@@ -1667,10 +1696,12 @@ def _unpack_member(book_path: str, arcname: str, fresh: bool = False) -> str:
             real = next((n for n in z.namelist() if n.lower().endswith(tail)), None)
         if real is None:
             raise RuntimeError(f"{arcname} not found in the package")
-        tmp = os.path.join(tempfile.mkdtemp(), os.path.basename(real))
-        with open(tmp, "wb") as f:
-            f.write(z.read(real))
+        tmp = os.path.join(tempfile.mkdtemp(prefix="twkit_unpack_"), os.path.basename(real))
+        with z.open(real) as src, open(tmp, "wb") as f:
+            shutil.copyfileobj(src, f, 1 << 20)
     if not fresh:
+        for k in [k for k in _HYPER_CACHE if k[0] == key[0] and k[3] == arcname]:
+            _drop_dir(os.path.dirname(_HYPER_CACHE.pop(k)))
         _HYPER_CACHE[key] = tmp
     return tmp
 
@@ -1706,9 +1737,13 @@ def _pick_target(book, db: str, table: str):
             with open(csv_tmp, "wb") as f:
                 f.write(z.read(csv_arc))
         hyper_tmp = os.path.join(tmpdir, "from_csv.hyper")
-        build_hyper_from_csv(csv_tmp, hyper_tmp,
-                             types=declared_column_types(book.root))
-        return _HyperTarget(hyper_tmp)
+        try:
+            build_hyper_from_csv(csv_tmp, hyper_tmp,
+                                 types=declared_column_types(book.root))
+            return _HyperTarget(hyper_tmp, own_dir=tmpdir)
+        except Exception:
+            _drop_dir(tmpdir)
+            raise
     sql = custom_sql_of(book)
     if sql:
         return _CustomSqlTarget(sql)
@@ -1730,20 +1765,35 @@ class _RelTarget:
         self.date_cols = date_cols
 
     def view_for(self, sql: str) -> str:
-        """View with only the tables whose fields are used in the query (plus the path to the root)."""
+        """View over only the tables the query reads, rooted at one of them. Tableau queries each table of a
+        relationship at its own grain; one flat join of several one-to-many tables multiplies the rows of each key
+        and Hyper spills the product to disk."""
         sp = self.spec
-        need = {"r0"}
+        used = {}
         for key, (al, _col) in sp["fields"].items():
             if f'"{key}"' in sql or (re.fullmatch(r"[A-Za-z_]\w*", key)
                                      and re.search(rf"(?<![\w\"]){re.escape(key)}(?![\w\"])", sql)):
-                need.add(al)
-        for al in list(need):
-            while al in sp["parent"]:
-                al = sp["parent"][al]
-                need.add(al)
-        sel = [f'{al}."{col}" AS "{key}"' for key, (al, col) in sp["fields"].items() if al in need]
-        joins = [j for al, j in sp["joins"] if al in need]
-        return f"SELECT {', '.join(sel)} FROM {sp['root']} AS r0 " + " ".join(joins)
+                used[al] = used.get(al, 0) + 1
+        order = list(sp["tables"])
+        root = max(used, key=lambda a: (used[a], -order.index(a))) if used else order[0]
+        adj: dict = {}
+        for a, b, cond in sp["edges"]:
+            adj.setdefault(a, []).append((b, cond))
+            adj.setdefault(b, []).append((a, cond))
+        via, queue = {root: None}, [root]
+        for al in queue:
+            for nb, cond in adj.get(al, []):
+                if nb not in via:
+                    via[nb] = (al, cond)
+                    queue.append(nb)
+        keep = {root}
+        for al in used:
+            while al in via and al not in keep:
+                keep.add(al)
+                al = via[al][0]
+        joins = [f"LEFT JOIN {sp['tables'][al]} AS {al} ON {via[al][1]}" for al in queue if al in keep and al != root]
+        sel = [f'{al}."{col}" AS "{key}"' for key, (al, col) in sp["fields"].items() if al in keep]
+        return f"SELECT {', '.join(sel)} FROM {sp['tables'][root]} AS {root} " + " ".join(joins)
 
     def execute(self, sql: str):
         return self.base.execute(f"WITH _rel AS ({self.view_for(sql)}) {sql}")
@@ -1804,7 +1854,7 @@ def relation_view(root, target):
                         fields.setdefault(c.get("name"), (o.get("id"), c.get("name")))
         root_id = next((o.get("id") for o in objs if o.get("id") in hyper_of), None)
         alias = {root_id: "r0"}
-        joins, parent = [], {}
+        edges = []
         rels = list(og.iter("relationship"))
         for _ in range(len(rels)):
             for rel in rels:
@@ -1825,7 +1875,6 @@ def relation_view(root, target):
                 if not pairs:
                     continue
                 alias[new] = f"r{len(alias)}"
-                parent[alias[new]] = alias[ib if new == ia else ia]
                 conds = []
                 txt = getattr(target, "text_cols", set()) or set()
                 for (ol, cl, fl_), (or_, cr, fr_) in pairs:
@@ -1834,8 +1883,7 @@ def relation_view(root, target):
                     lhs = fl_ if not ol else (fl_ or "{}").format(f'{alias[ol]}."{cl}"')
                     rhs = fr_ if not or_ else (fr_ or "{}").format(f'{alias[or_]}."{cr}"')
                     conds.append(f'{lhs}{col_} IS NOT DISTINCT FROM {rhs}{col_}')
-                joins.append((alias[new], f"LEFT JOIN {hyper_of[new]} AS {alias[new]} ON "
-                              + " AND ".join(conds)))
+                edges.append((alias[ib if new == ia else ia], alias[new], " AND ".join(conds)))
         if len(alias) < 2:
             continue
         flds, cols, dates = {}, set(), set()
@@ -1848,7 +1896,7 @@ def relation_view(root, target):
                     dates.add(key)
         if not flds:
             continue
-        spec = {"root": hyper_of[root_id], "fields": flds, "joins": joins, "parent": parent}
+        spec = {"tables": {al: hyper_of[oid] for oid, al in alias.items()}, "fields": flds, "edges": edges}
         return spec, cols, dates
     return None
 
@@ -2671,6 +2719,11 @@ def _run_sheet(ws, tr: Translator, target, limit: int, shared_filters=None,
     try:
         rows = target.execute(sql)
     except Exception as exc:
+        if _GUARD_STOP.search(str(exc)):
+            return SheetResult(name, "skipped", sql=sql, note=(
+                "stopped by the Hyper disk/time guard: "
+                + ("one flat join of the relationship tables multiplies rows; Tableau aggregates each table "
+                   "on its own" if isinstance(target, _RelTarget) else "the query runs away")), **extra)
         dss = [d.get("name") for d in ws.findall(".//view/datasources/datasource")
                if d.get("name") != "Parameters"]
         m_ = _UNKNOWN_COLUMN.search(str(exc))
