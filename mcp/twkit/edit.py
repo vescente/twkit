@@ -4030,6 +4030,108 @@ def set_zone_style(root, dashboard: str, sheets: list, fmt: dict,
     return done
 
 
+BOOK_TEXT_ELEMENTS = ("worksheet", "header", "label", "field-labels", "title", "cell")
+BOOK_FILL_ELEMENTS = ("header", "field-labels", "title", "pane")
+BOOK_LINE_ELEMENTS = ("gridline", "zeroline", "table-div", "header-div", "axis")
+BOOK_MIN_CONTRAST = 4.5
+BOOK_MARK_CONTRAST = 3.0
+
+
+def _hex6(color: str) -> str:
+    c = (color or "").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", c):
+        raise ValueError(f"color {color!r} is not #rrggbb")
+    return c.lower()
+
+
+def _recolor_runs(node, against: str, text: str, contrast, done: dict) -> None:
+    for run in node.iter("run"):
+        c = run.get("fontcolor") or ""
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", c) and contrast(c, against) < BOOK_MIN_CONTRAST:
+            run.set("fontcolor", text)
+            done["text_runs"] += 1
+
+
+def set_book_colors(root, page: str, panel: str, text: str, line: str) -> dict:
+    """One color scheme for a whole workbook (a dark one included): page and sheet backgrounds,
+    text and lines. Colors that already read on the new background are kept."""
+    from .dash import _DASH_ORDER
+    from .stylecritic import contrast
+    page, panel, text, line = (_hex6(c) for c in (page, panel, text, line))
+    done = {"dashboards": 0, "sheets": 0, "text": 0, "fills": 0, "lines": 0, "text_runs": 0, "zones": 0,
+            "borders": 0, "marks": 0}
+    for dash in root.iter("dashboard"):
+        if dash.getparent() is None or dash.getparent().tag != "dashboards":
+            continue
+        st = dash.find("style")
+        if st is None:
+            st = etree.Element("style")
+            insert_in_order(dash, st, _DASH_ORDER)
+        rule = next((r for r in st.findall("style-rule") if r.get("element") == "table"), None)
+        if rule is None:
+            rule = etree.Element("style-rule")
+            rule.set("element", "table")
+            st.insert(0, rule)
+        _put_format(rule, "background-color", page)
+        for zs in dash.iter("zone-style"):
+            for f in zs.findall("format"):
+                v = f.get("value") or ""
+                if f.get("attr") == "background-color" and re.fullmatch(r"#[0-9a-fA-F]{6}", v) \
+                        and contrast(v, text) < BOOK_MIN_CONTRAST:
+                    f.set("value", panel)
+                    done["zones"] += 1
+                elif f.get("attr") == "border-color":
+                    f.set("value", line)
+                    done["borders"] += 1
+        for ft in dash.iter("formatted-text"):
+            _recolor_runs(ft, page, text, contrast, done)
+        done["dashboards"] += 1
+    for ws in root.iter("worksheet"):
+        tbl = ws.find("table")
+        if tbl is None:
+            continue
+        _put_format(_style_rule(tbl, "table"), "background-color", panel)
+        _put_format(_style_rule(tbl, "worksheet"), "color", text)
+        for sr in tbl.findall("style/style-rule"):
+            el = sr.get("element")
+            for f in sr.findall("format"):
+                a, v = f.get("attr"), f.get("value") or ""
+                if not re.fullmatch(r"#[0-9a-fA-F]{6}", v):
+                    continue
+                if el in BOOK_TEXT_ELEMENTS and a == "color" and contrast(v, panel) < BOOK_MIN_CONTRAST:
+                    f.set("value", text)
+                    done["text"] += 1
+                elif el in BOOK_FILL_ELEMENTS and a in ("background-color", "band-color") \
+                        and contrast(v, text) < BOOK_MIN_CONTRAST:
+                    f.set("value", panel)
+                    done["fills"] += 1
+                elif a == "border-color":
+                    f.set("value", line)
+                    done["borders"] += 1
+            if el in BOOK_LINE_ELEMENTS:
+                _put_format(sr, "stroke-color", line)
+                done["lines"] += 1
+        for f in ws.iter("format"):
+            v = f.get("value") or ""
+            if f.get("attr") == "mark-color" and re.fullmatch(r"#[0-9a-fA-F]{6}", v) \
+                    and contrast(v, panel) < BOOK_MARK_CONTRAST:
+                f.set("value", text)
+                done["marks"] += 1
+        for node in list(ws.iter("title")) + list(ws.iter("customized-label")):
+            _recolor_runs(node, panel, text, contrast, done)
+        done["sheets"] += 1
+    return done
+
+
+def _put_format(rule, attr: str, value: str) -> None:
+    f = next((x for x in rule.findall("format") if x.get("attr") == attr and not x.get("field")
+              and not x.get("scope")), None)
+    if f is None:
+        f = etree.SubElement(rule, "format")
+        f.set("attr", attr)
+    f.set("value", value)
+
+
 ROW_HEADER_FLOOR_PX = 68
 
 

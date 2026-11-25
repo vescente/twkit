@@ -1989,6 +1989,17 @@ def register_chart_edit_tools(server) -> None:
                            ensure_ascii=False)
 
     @server.tool()
+    def edit_book_colors(page: str, panel: str, text: str, line: str) -> str:
+        """One color scheme for the whole workbook, a dark one included (#rrggbb each): `page` is the
+        dashboard background, `panel` the sheet background, `text` and `line` the text and grid lines.
+        Existing text and fills that still read on the new background are kept."""
+        try:
+            done = ED.set_book_colors(get_editor().root, page, panel, text, line)
+        except ValueError as exc:
+            return f"ERROR: {exc}"
+        return _json.dumps(done, ensure_ascii=False)
+
+    @server.tool()
     def edit_line_pattern(sheet: str, pattern: str = "dashed") -> str:
         """Line mark pattern of a sheet: `dashed` for a plan, forecast or reference series, `solid` back."""
         try:

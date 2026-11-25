@@ -378,3 +378,9 @@ The cheapest cure: do not put `%` in NEW dimension labels.
   and needs `<PatternedLineMarks/>` in the format manifest (`_.fcp.PatternedLineMarks.true...` before
   2025.3). Without the entry Desktop 2026.1 refuses the file ("value 'mark-line-pattern' not in
   enumeration", D2E8DA72); with it the line draws dashed. `edit.set_line_pattern` adds both. Lint R32.
+- A dark workbook has no switch: Desktop's workbook themes are light. It is formatting — the dashboard
+  `table` rule's `background-color` (page), each sheet's `table` rule (panel), `color` of `worksheet`,
+  `header`, `label`, `field-labels`, `title`, `cell`, `stroke-color` of grid, zero, axis and divider
+  lines, `border-color`, and `fontcolor` of title and label runs. `mark-color` below 3:1 against the
+  panel disappears. `edit.set_book_colors` recolors only what fails contrast; Desktop 2026.1 opens
+  the result (verified on a 10-dashboard, 150-sheet workbook).

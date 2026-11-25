@@ -688,6 +688,39 @@ def test_line_pattern_declares_its_manifest_flag():
         ED.set_line_pattern(root, "GGR", "wavy")
 
 
+def test_book_colors_keep_what_reads_and_fix_what_does_not():
+    root = _tree("""<workbook><dashboards><dashboard name='D'><style/>
+        <zones><zone id='1'><zone-style><format attr='background-color' value='#ffffff'/></zone-style>
+        </zone></zones></dashboard></dashboards>
+      <worksheets><worksheet name='S'><table><style>
+        <style-rule element='label'><format attr='color' value='#333333'/></style-rule>
+        <style-rule element='header'><format attr='color' value='#ffd400'/>
+          <format attr='background-color' value='#f5f5f5'/></style-rule>
+        <style-rule element='gridline'><format attr='line-visibility' value='on'/></style-rule>
+        <style-rule element='pane'><format attr='border-color' value='#ffffff'/></style-rule>
+      </style><panes><pane><mark class='Line'/><style><style-rule element='mark'>
+        <format attr='mark-color' value='#1b1b1b'/></style-rule></style></pane>
+      <pane><mark class='Bar'/><style><style-rule element='mark'>
+        <format attr='mark-color' value='#59a14f'/></style-rule></style></pane></panes></table></worksheet></worksheets>
+    </workbook>""")
+    done = ED.set_book_colors(root, "#0f1115", "#171a21", "#e6e8eb", "#2a2f38")
+    assert done["dashboards"] == 1 and done["sheets"] == 1
+    fmt = lambda el, attr: [f.get("value") for f in root.findall(
+        f".//worksheet//style-rule[@element='{el}']/format[@attr='{attr}']")]
+    assert fmt("table", "background-color") == ["#171a21"]
+    assert fmt("label", "color") == ["#e6e8eb"]
+    assert fmt("header", "color") == ["#ffd400"]
+    assert fmt("header", "background-color") == ["#171a21"]
+    assert fmt("gridline", "stroke-color") == ["#2a2f38"]
+    assert fmt("pane", "border-color") == ["#2a2f38"]
+    assert [f.get("value") for f in root.iter("format") if f.get("attr") == "mark-color"] == \
+        ["#e6e8eb", "#59a14f"]
+    assert root.find(".//dashboard/style/style-rule[@element='table']/format").get("value") == "#0f1115"
+    assert root.find(".//zone-style/format").get("value") == "#171a21"
+    with pytest.raises(ValueError):
+        ED.set_book_colors(root, "black", "#171a21", "#e6e8eb", "#2a2f38")
+
+
 def test_zone_title_is_switched_off_on_dashboard():
     root = _kpi_book()
     assert ED.show_zone_title(root, "Overview", ["GGR"]) == 1
