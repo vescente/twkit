@@ -60,6 +60,7 @@ VISIBLE = [
     ("edit_text_card", dict(sheet="KPI", column="product",
                             lines='[{"field": "[sales]", "size": "18", "bold": true}]'), []),
     ("edit_mark_color", dict(sheet="Bars", color="#e15759"), []),
+    ("edit_line_pattern", dict(sheet="Trend", pattern="dashed"), []),
     ("edit_show_zone_title", dict(dashboard="Overview", sheets="Bars", show=True), []),
     ("edit_add_measure", dict(sheet="Table", field="orders"), []),
     ("edit_order_measures", dict(sheet="Table", fields="Margin, cost, sales"), []),

@@ -374,3 +374,7 @@ The cheapest cure: do not put `%` in NEW dimension labels.
 - Desktop may save a packaged Excel or text source by its unpack path (`.../tableau-temp/<n>/Data/...`).
   Desktop still opens it; a server refresh fails with "make sure you have specified the correct path
   and have read permission for the file". The relative `Data/...` path works in both. Lint R50.
+- A line pattern is `<format attr='mark-line-pattern' value='dashed'>` in the pane `mark` style rule
+  and needs `<PatternedLineMarks/>` in the format manifest (`_.fcp.PatternedLineMarks.true...` before
+  2025.3). Without the entry Desktop 2026.1 refuses the file ("value 'mark-line-pattern' not in
+  enumeration", D2E8DA72); with it the line draws dashed. `edit.set_line_pattern` adds both. Lint R32.

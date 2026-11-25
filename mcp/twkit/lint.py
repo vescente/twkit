@@ -798,6 +798,9 @@ def r31_table_calc_drift(b: Book) -> list[Violation]:
 _MANIFEST_GATES = {
     ("filter", "period-type-v2"): "ISO8601PeriodTypes",
 }
+_MANIFEST_FORMAT_GATES = {
+    "mark-line-pattern": "PatternedLineMarks",
+}
 _MANIFEST_ELEMENT_GATES = {
     "shelf-sorts": "IntuitiveSorting",
     "computed-sort": "SortTagCleanup",
@@ -820,6 +823,18 @@ def r32_manifest_gate(b: Book) -> list[Violation]:
                              f"format manifest; Tableau will NOT open the workbook",
                              where="document-format-change-manifest",
                              fix=f"edit.ensure_manifest(root, '{entry}')"))
+    for attr, entry in _MANIFEST_FORMAT_GATES.items():
+        if entry in have:
+            continue
+        sheets = sorted({ws.get("name") or "" for ws in b.root.iter("worksheet")
+                         for f in ws.iter("format") if f.get("attr") == attr})
+        if sheets:
+            out.append(Violation("R32", ERROR,
+                                 f"<format attr='{attr}'> on sheets {', '.join(sheets[:5])} but "
+                                 f"<{entry}/> is missing from the format manifest; Tableau will NOT "
+                                 f"open the workbook",
+                                 where="document-format-change-manifest",
+                                 fix=f"edit.ensure_manifest(root, '{entry}') — set_line_pattern adds it"))
     for tag, entry in _MANIFEST_ELEMENT_GATES.items():
         if entry in have:
             continue

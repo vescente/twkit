@@ -677,6 +677,17 @@ def test_block_color_is_set_and_reset():
     assert [f.get("value") for f in fmts if f.get("attr") == "mark-color"] == ["#59a14f"]
 
 
+def test_line_pattern_declares_its_manifest_flag():
+    root = _kpi_book()
+    root.insert(0, etree.Element("document-format-change-manifest"))
+    assert ED.set_line_pattern(root, "GGR", "dashed") == 1
+    fmts = root.findall(".//pane/style/style-rule[@element='mark']/format")
+    assert [f.get("value") for f in fmts if f.get("attr") == "mark-line-pattern"] == ["dashed"]
+    assert root.find(".//document-format-change-manifest/PatternedLineMarks") is not None
+    with pytest.raises(ValueError):
+        ED.set_line_pattern(root, "GGR", "wavy")
+
+
 def test_zone_title_is_switched_off_on_dashboard():
     root = _kpi_book()
     assert ED.show_zone_title(root, "Overview", ["GGR"]) == 1

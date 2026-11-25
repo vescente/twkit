@@ -112,6 +112,19 @@ def mark_color(ws) -> str:
     return BAR
 
 
+LINE_DASH = {"dashed": "6 4"}
+
+
+def line_dash(ws) -> str:
+    """`stroke-dasharray` for the sheet's line pattern (`mark-line-pattern`), '' for solid."""
+    for sr in (ws.iter("style-rule") if ws is not None else ()):
+        if sr.get("element") == "mark":
+            for f in sr.findall("format"):
+                if f.get("attr") == "mark-line-pattern" and f.get("value") in LINE_DASH:
+                    return f" stroke-dasharray='{LINE_DASH[f.get('value')]}'"
+    return ""
+
+
 _ALIAS: dict = {}
 
 
@@ -2868,6 +2881,7 @@ def _render_line(rows, ndims: int, cap: str, w: float, h: float, ws=None,
     pos = {x: (k / max(1, len(xs) - 1)) * W for k, x in enumerate(xs)}
     lines, labs = [], []
     lspec = line_labels(ws) if ws is not None else None
+    dash = line_dash(ws)
     for sv in series:
         vals_s = sorted(((pos[str(r[xi])], _num(r[-1])) for r in data if skey(r) == sv),
                         key=lambda p: p[0])
@@ -2894,7 +2908,7 @@ def _render_line(rows, ndims: int, cap: str, w: float, h: float, ws=None,
                 lines.append(f"<polygon points='{pts[0][0]:.1f},{H:.1f} {poly} {pts[-1][0]:.1f},{H:.1f}' "
                              f"fill='{col}' fill-opacity='0.55' stroke='none'/>")
             lines.append(f"<polyline points='{poly}' fill='none' stroke='{col}' "
-                         f"stroke-width='{1.5 if area else 2}'/>")
+                         f"stroke-width='{1.5 if area else 2}'{dash}/>")
     for i in extra:
         ev = [(pos[str(r[xi])], _num(r[i])) for r in data if _num(r[i]) is not None]
         if len(ev) < 2:
@@ -2902,7 +2916,7 @@ def _render_line(rows, ndims: int, cap: str, w: float, h: float, ws=None,
         ea, eb = (y0, y0 + span) if sync else axis_domain(min(v for _, v in ev), max(v for _, v in ev))
         pts = sorted((x, H - (v - ea) / ((eb - ea) or 1.0) * H) for x, v in ev)
         lines.append(f"<polyline points='{' '.join(f'{x:.1f},{y:.1f}' for x, y in pts)}' fill='none' "
-                     f"stroke='{_MARK['color']}' stroke-width='2'/>")
+                     f"stroke='{_MARK['color']}' stroke-width='2'{dash}/>")
     leg = ""
     if si is not None and ws is None:
         leg = "<div class='legend'>" + "".join(

@@ -545,6 +545,23 @@ def test_r32_sort_without_manifest_flag():
     assert not r32_manifest_gate(book("<IntuitiveSorting/>"))
 
 
+def test_r32_line_pattern_without_manifest_flag():
+    from twkit.lint import Book, ERROR, r32_manifest_gate
+    from twkit import safexml
+    from lxml import etree
+    def book(flag: str):
+        xml = f"""<?xml version='1.0' encoding='utf-8' ?>
+<workbook><document-format-change-manifest>{flag}</document-format-change-manifest>
+<worksheets><worksheet name='A'><table><panes><pane><mark class='Line'/>
+  <style><style-rule element='mark'><format attr='mark-line-pattern' value='dashed'/></style-rule></style>
+</pane></panes></table></worksheet></worksheets></workbook>"""
+        root = safexml.from_bytes(etree.tostring(etree.fromstring(xml.encode())))
+        return Book(path="<memory>", root=root, raw=xml.encode(), is_twbx=False)
+    bad = [v for v in r32_manifest_gate(book("")) if v.severity == ERROR]
+    assert bad and "PatternedLineMarks" in str(bad[0]), bad
+    assert not r32_manifest_gate(book("<PatternedLineMarks/>"))
+
+
 def test_r40_color_map_with_source_prefix():
     from lxml import etree as ET
     from twkit import lint as L

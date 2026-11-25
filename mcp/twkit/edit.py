@@ -3198,8 +3198,8 @@ def text_card(root, sheet: str, column: str, lines: list, *,
             "text_measure_count": len(refs)}
 
 
-def set_mark_color(root, sheet: str, color: str) -> int:
-    """Solid mark color of a sheet (`mark-color`): color encodes the BLOCK, not the rank."""
+def _set_mark_format(root, sheet: str, attr: str, value: str) -> int:
+    """One `<format>` of the pane `mark` style rule on every pane of a sheet."""
     ws = _sheet(root, sheet)
     if ws is None:
         raise ValueError(f"sheet {sheet!r} is not in the workbook")
@@ -3212,12 +3212,30 @@ def set_mark_color(root, sheet: str, color: str) -> int:
         if rule is None:
             rule = etree.SubElement(st, "style-rule")
             rule.set("element", "mark")
-        f = next((x for x in rule if x.get("attr") == "mark-color"), None)
+        f = next((x for x in rule if x.get("attr") == attr), None)
         if f is None:
             f = etree.SubElement(rule, "format")
-            f.set("attr", "mark-color")
-        f.set("value", color)
+            f.set("attr", attr)
+        f.set("value", value)
         done += 1
+    return done
+
+
+def set_mark_color(root, sheet: str, color: str) -> int:
+    """Solid mark color of a sheet (`mark-color`): color encodes the BLOCK, not the rank."""
+    return _set_mark_format(root, sheet, "mark-color", color)
+
+
+LINE_PATTERNS = ("solid", "dashed")
+LINE_PATTERN_FLAG = "PatternedLineMarks"
+
+
+def set_line_pattern(root, sheet: str, pattern: str = "dashed") -> int:
+    """Line mark pattern of a sheet (`mark-line-pattern`), declaring `PatternedLineMarks`."""
+    if pattern not in LINE_PATTERNS:
+        raise ValueError(f"line pattern {pattern!r} is not one of {', '.join(LINE_PATTERNS)}")
+    done = _set_mark_format(root, sheet, "mark-line-pattern", pattern)
+    ensure_format_flags(root, (LINE_PATTERN_FLAG,))
     return done
 
 

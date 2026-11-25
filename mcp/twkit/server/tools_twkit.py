@@ -1989,6 +1989,15 @@ def register_chart_edit_tools(server) -> None:
                            ensure_ascii=False)
 
     @server.tool()
+    def edit_line_pattern(sheet: str, pattern: str = "dashed") -> str:
+        """Line mark pattern of a sheet: `dashed` for a plan, forecast or reference series, `solid` back."""
+        try:
+            n = ED.set_line_pattern(get_editor().root, sheet, pattern)
+        except ValueError as exc:
+            return f"ERROR: {exc}"
+        return _json.dumps({"pane_count": n, "pattern": pattern}, ensure_ascii=False)
+
+    @server.tool()
     def edit_show_zone_title(dashboard: str, sheets: str, show: bool = False) -> str:
         """Whether a sheet title is shown in its page zone (`show-title`)."""
         return _json.dumps(
